@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0f6a4f" />
+  <title>سليمة | إدارة إنتاج المصنع</title>
+  <link rel="icon" type="image/png" href="assets/salima-logo.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <section class="auth-screen" id="authScreen">
+    <div class="auth-card">
+      <img src="assets/salima-logo.png" alt="شعار شركة سليمة" class="auth-logo" />
+      <span class="eyebrow">Salima Factory</span>
+      <h1>تسجيل الدخول</h1>
+      <p>ادخل بحساب المدير أو المهندس للوصول إلى نظام إدارة الإنتاج.</p>
+      <form id="loginForm" class="auth-form">
+        <label>البريد الإلكتروني<input type="email" id="loginEmail" autocomplete="username" required placeholder="name@salima.com" /></label>
+        <label>كلمة المرور<input type="password" id="loginPassword" autocomplete="current-password" required minlength="6" placeholder="••••••••" /></label>
+        <button type="submit" class="primary-btn" id="loginBtn">دخول</button>
+      </form>
+      <div class="auth-message" id="authMessage">جاري تجهيز الاتصال...</div>
+    </div>
+  </section>
+
+  <div class="app-shell hidden" id="appShell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand-card">
+        <img src="assets/salima-logo.png" alt="شعار شركة سليمة" class="brand-logo" />
+        <div class="brand-copy">
+          <strong>نظام إدارة المصنع</strong>
+          <span>Salima Factory</span>
+        </div>
+      </div>
+
+      <div class="prototype-chip live-chip">متصل بقاعدة البيانات</div>
+
+      <nav class="nav-list" aria-label="التنقل الرئيسي">
+        <button class="nav-item active" data-view="dashboard"><span class="nav-icon">⌂</span><span>لوحة التحكم</span></button>
+        <button class="nav-item" data-view="production"><span class="nav-icon">⚙</span><span>الإنتاج اليومي</span></button>
+        <button class="nav-item admin-only" data-view="shipments"><span class="nav-icon">▣</span><span>الشحنات الواردة</span></button>
+        <button class="nav-item admin-only" data-view="products"><span class="nav-icon">◫</span><span>الأصناف</span></button>
+        <button class="nav-item admin-only" data-view="reports"><span class="nav-icon">▤</span><span>التقارير</span></button>
+        <button class="nav-item admin-only" data-view="records"><span class="nav-icon">⌕</span><span>السجلات</span></button>
+        <button class="nav-item admin-only" data-view="users"><span class="nav-icon">♙</span><span>المستخدمون</span></button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="role-card">
+          <span><small>الحساب الحالي</small><strong id="roleLabel">—</strong></span>
+          <span class="online-dot" title="متصل"></span>
+        </div>
+        <button class="secondary-btn logout-btn" id="logoutBtn" type="button">تسجيل الخروج</button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div class="topbar-title">
+          <button class="mobile-menu" id="mobileMenu" aria-label="فتح القائمة">☰</button>
+          <div><p class="eyebrow" id="pageEyebrow">نظرة عامة</p><h1 id="pageTitle">لوحة التحكم</h1></div>
+        </div>
+        <div class="topbar-actions">
+          <button class="theme-toggle" id="themeToggle" type="button" aria-label="تبديل الوضع الليلي والنهاري" title="تبديل الوضع">
+            <span class="theme-toggle-icon" id="themeToggleIcon">☾</span>
+            <span class="theme-toggle-text" id="themeToggleText">ليلي</span>
+          </button>
+          <div class="date-pill" id="todayLabel"></div>
+          <div class="user-chip"><span class="user-avatar">س</span><div><strong id="userTitle">مدير المصنع</strong><small>شركة سليمة</small></div></div>
+        </div>
+      </header>
+
+      <section class="view active" id="view-dashboard">
+        <div class="hero-card">
+          <div>
+            <span class="hero-kicker">الإنتاج • الخام • التوالف</span>
+            <h2>صورة يومية واضحة للمصنع من أول رولة حتى المنتج النهائي.</h2>
+            <p>يسجل المدير إجمالي الوارد، ويسجل المهندس أكواد وأوزان الرولات المستخدمة والإنتاج، ثم تجمع التقارير الأسبوعية والشهرية الأرقام تلقائيًا.</p>
+          </div>
+          <button class="primary-btn" data-go="production">+ تسجيل إنتاج اليوم</button>
+        </div>
+
+        <div class="stats-grid">
+          <article class="stat-card"><div class="stat-head"><span>وزن إنتاج اليوم</span><span class="stat-icon">▦</span></div><strong id="statProductionWeight">0</strong><small>كغم</small><div class="stat-foot" id="statProductionFoot">حسب تركيبة الصنف</div></article>
+          <article class="stat-card"><div class="stat-head"><span>وزن الرولات اليوم</span><span class="stat-icon">◉</span></div><strong id="statRawWeight">0</strong><small>كغم</small><div class="stat-foot" id="statRawFoot">من إدخال المهندس</div></article>
+          <article class="stat-card"><div class="stat-head"><span>التوالف اليوم</span><span class="stat-icon">△</span></div><strong id="statWaste">0</strong><small>كغم</small><div class="stat-foot" id="statWasteFoot">0% من وزن الرولات</div></article>
+          <article class="stat-card admin-only"><div class="stat-head"><span>رصيد الخام التقديري</span><span class="stat-icon">◫</span></div><strong id="statBalance">0</strong><small>كغم</small><div class="stat-foot" id="statBalanceFoot">الوارد − المسجل بالإنتاج</div></article>
+        </div>
+
+        <div class="dashboard-grid">
+          <article class="panel chart-panel">
+            <div class="panel-head"><div><span class="eyebrow">آخر 7 أيام</span><h3>وزن الإنتاج اليومي</h3></div></div>
+            <div class="bar-chart" id="productionChart"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><div><span class="eyebrow">آخر الحركات</span><h3>الإنتاج المسجل</h3></div><button class="text-btn admin-only" data-go="records">عرض الكل</button></div>
+            <div id="recentProduction" class="activity-list"></div>
+          </article>
+        </div>
+
+        <div class="dashboard-grid second-row admin-only">
+          <article class="panel">
+            <div class="panel-head"><div><span class="eyebrow">الوارد هذا الشهر</span><h3>ملخص الشحنات</h3></div></div>
+            <div id="monthlyInboundSummary" class="summary-list"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><div><span class="eyebrow">الأسبوع الحالي</span><h3>ملخص التقرير</h3></div><button class="text-btn" data-go="reports">التقرير الكامل</button></div>
+            <div id="weeklySummary" class="summary-list"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="view" id="view-production">
+        <div class="section-intro">
+          <div><span class="eyebrow">نموذج المهندس</span><h2 id="productionFormTitle">تسجيل الإنتاج اليومي</h2><p>اختر الصنف، أضف أكواد الرولات وأوزانها، وسجّل النايلون الشفاف والمطبوع، ثم عدد المشاتيح والتوالف. وزن المنتج النهائي يحسب تلقائيًا.</p></div>
+          <span class="status-chip">الحفظ مباشر في قاعدة البيانات</span>
+        </div>
+
+        <form id="productionForm" class="form-layout">
+          <article class="panel form-panel">
+            <div class="panel-head"><div class="title-with-step"><span class="step-number">01</span><h3>بيانات التشغيل</h3></div></div>
+            <div class="form-grid cols-3">
+              <label>التاريخ<input type="date" id="prodDate" required /></label>
+              <label>الوردية<select id="prodShift"><option>صباحية</option><option>مسائية</option><option>ليلية</option></select></label>
+              <label>الصنف<select id="prodProduct" required></select></label>
+            </div>
+          </article>
+
+          <article class="panel form-panel">
+            <div class="panel-head"><div class="title-with-step"><span class="step-number">02</span><h3>الرولات المستخدمة</h3></div><button type="button" class="secondary-btn" id="addRollRow">+ إضافة رولة</button></div>
+            <div class="table-scroll">
+              <table class="data-table compact-table">
+                <thead><tr><th>كود الرولة</th><th>وزن الرولة (كغم)</th><th>ملاحظة</th><th></th></tr></thead>
+                <tbody id="productionRollRows"></tbody>
+              </table>
+            </div>
+            <div class="inline-total">إجمالي وزن الرولات لليوم: <strong id="totalUsedWeight">0 كغم</strong></div>
+          </article>
+
+          <article class="panel form-panel material-panel">
+            <div class="panel-head"><div class="title-with-step"><span class="step-number">03</span><h3>النايلون المستخدم</h3></div><span class="material-badge">مواد تعبئة</span></div>
+            <div class="form-grid cols-3">
+              <label>نايلون شفاف (كغم)<input type="number" id="transparentNylonWeight" min="0" step="0.01" value="0" placeholder="0" /></label>
+              <label>طريقة إدخال النايلون المطبوع<select id="printedNylonMode"><option value="weight">بالوزن</option><option value="rolls">بعدد الرولات</option></select></label>
+              <label id="printedNylonWeightWrap">نايلون مطبوع (كغم)<input type="number" id="printedNylonWeight" min="0" step="0.01" value="0" placeholder="0" /></label>
+              <label id="printedNylonRollsWrap" class="hidden">نايلون مطبوع (عدد الرولات)<input type="number" id="printedNylonRolls" min="0" step="1" value="0" placeholder="0" /></label>
+            </div>
+            <p class="calculation-note">النايلون الشفاف يُسجل بالوزن. النايلون المطبوع يمكن تسجيله بالوزن أو بعدد الرولات حسب المتوفر عند المهندس.</p>
+          </article>
+
+          <article class="panel form-panel">
+            <div class="panel-head"><div class="title-with-step"><span class="step-number">04</span><h3>الإنتاج والتوالف</h3></div></div>
+            <div class="form-grid cols-4">
+              <label>عدد المشاتيح<input type="number" id="palletsProduced" min="0" step="1" value="0" required /></label>
+              <label>شوالات إضافية<input type="number" id="extraBags" min="0" step="1" value="0" /></label>
+              <label>التوالف (كغم)<input type="number" id="wasteWeight" min="0" step="0.01" value="0" /></label>
+              <label>نوع التالف<select id="wasteType"><option>قص وتعديل</option><option>تالف تشغيل</option><option>تالف جودة</option><option>أخرى</option></select></label>
+            </div>
+
+            <div class="calc-card" id="packagingPreview">
+              <div><span>المشاتيح</span><strong data-calc="pallets">0</strong></div>
+              <div><span>الشوالات</span><strong data-calc="bags">0</strong></div>
+              <div><span>الحبات / العبوات</span><strong data-calc="packs">0</strong></div>
+              <div><span>الحبات الصغيرة</span><strong data-calc="units">0</strong></div>
+              <div class="calc-highlight"><span>وزن الإنتاج</span><strong data-calc="weight">0 كغم</strong></div>
+            </div>
+            <p class="calculation-note" id="calculationNote"></p>
+            <label class="full-label">ملاحظات التشغيل<textarea id="prodNotes" rows="3" placeholder="أي ملاحظة عن الرولات، الماكينة، الجودة أو التشغيل..."></textarea></label>
+          </article>
+
+          <div class="form-actions">
+            <button type="button" class="secondary-btn hidden" id="cancelProductionEdit">إلغاء التعديل</button>
+            <button type="button" class="secondary-btn" id="clearProductionForm">تفريغ النموذج</button>
+            <button type="submit" class="primary-btn" id="saveProductionBtn">حفظ إنتاج اليوم</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="view admin-only" id="view-shipments">
+        <div class="section-intro">
+          <div><span class="eyebrow">إدخال المدير</span><h2>الشحنات الواردة</h2><p>المدير يسجل الشحنة كإجمالي: عدد الحاويات، عدد الرولات، والوزن الإجمالي للرولات فقط؛ بدون إدخال وزن كل رولة.</p></div>
+          <button class="primary-btn" id="focusShipmentForm">+ إضافة شحنة</button>
+        </div>
+
+        <div class="split-layout">
+          <article class="panel" id="shipmentFormPanel">
+            <div class="panel-head"><div><h3 id="shipmentFormTitle">شحنة جديدة</h3><span class="muted">هذه الأرقام ستقارن لاحقًا مع إدخال المهندس في التقرير الشهري.</span></div></div>
+            <form id="shipmentForm">
+              <input type="hidden" id="shipmentEditId" />
+              <div class="form-grid cols-2">
+                <label>تاريخ الوصول<input type="date" id="shipmentDate" required /></label>
+                <label>اسم المورد / الشركة<input type="text" id="shipmentSupplier" placeholder="اختياري" /></label>
+                <label>عدد الحاويات<input type="number" id="containerCount" min="1" value="1" required /></label>
+                <label>عدد الرولات<input type="number" id="shipmentRollCount" min="1" value="1" required /></label>
+                <label>الوزن الإجمالي للرولات (كغم)<input type="number" id="shipmentTotalWeight" min="0.01" step="0.01" required /></label>
+                <label>رقم الشحنة / الفاتورة<input type="text" id="shipmentRef" placeholder="اختياري" /></label>
+              </div>
+              <label class="full-label">ملاحظات<textarea id="shipmentNotes" rows="2"></textarea></label>
+              <div class="form-actions inside-form"><button type="button" class="secondary-btn hidden" id="cancelShipmentEdit">إلغاء التعديل</button><button type="submit" class="primary-btn">حفظ الشحنة</button></div>
+            </form>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head"><div><span class="eyebrow">هذا الشهر</span><h3>ملخص الوارد</h3></div></div>
+            <div class="inbound-kpis" id="shipmentMonthKpis"></div>
+          </article>
+        </div>
+
+        <article class="panel table-panel">
+          <div class="panel-head"><div><span class="eyebrow">كل الشحنات</span><h3>سجل الوارد</h3></div><input class="search-input" id="shipmentSearch" placeholder="بحث بالمورد أو الرقم..." /></div>
+          <div class="table-scroll"><table class="data-table"><thead><tr><th>التاريخ</th><th>المورد</th><th>الحاويات</th><th>الرولات</th><th>الوزن الإجمالي</th><th>المرجع</th><th>إجراءات</th></tr></thead><tbody id="shipmentsTable"></tbody></table></div>
+        </article>
+      </section>
+
+      <section class="view admin-only" id="view-products">
+        <div class="section-intro">
+          <div><span class="eyebrow">تعريف الإنتاج</span><h2>الأصناف والتعبئة</h2><p>تم تجهيز أصناف منى، مرام، رانيا والهنا. وزن الوحدة الصغيرة يختلف حسب الصنف ويستخدم لحساب وزن الإنتاج بدقة.</p></div>
+          <button class="primary-btn" id="toggleProductForm">+ صنف جديد</button>
+        </div>
+
+        <article class="panel hidden" id="productFormPanel">
+          <form id="productForm">
+            <input type="hidden" id="productEditId" />
+            <div class="form-grid cols-5">
+              <label>اسم الصنف<input id="productName" required placeholder="مثال: محارم المنى" /></label>
+              <label>شوال / مشتاح<input id="bagsPerPallet" type="number" min="1" required /></label>
+              <label>حبة / شوال<input id="packsPerBag" type="number" min="1" required /></label>
+              <label>حبة صغيرة / حبة<input id="unitsPerPack" type="number" min="1" required /></label>
+              <label>وزن الحبة الصغيرة (كغم)<input id="unitWeightKg" type="number" min="0.001" step="0.001" value="0.2" required /></label>
+            </div>
+            <div class="form-actions inside-form"><button type="button" class="secondary-btn hidden" id="cancelProductEdit">إلغاء التعديل</button><button class="primary-btn" type="submit">حفظ الصنف</button></div>
+          </form>
+        </article>
+
+        <div class="product-grid" id="productsGrid"></div>
+      </section>
+
+      <section class="view admin-only" id="view-reports">
+        <div class="section-intro">
+          <div><span class="eyebrow">تقارير الإدارة</span><h2>التقرير الأسبوعي والمقارنة الشهرية</h2><p>التقرير الأسبوعي يجمع كل يوم لوحده ثم يعطي الإجماليات. المقارنة الشهرية تربط إجمالي الوارد من المدير مع إجمالي الرولات المسجلة من المهندس.</p></div>
+        </div>
+
+        <article class="panel report-controls">
+          <div class="report-filter">
+            <label>من<input type="date" id="reportFrom" /></label>
+            <label>إلى<input type="date" id="reportTo" /></label>
+            <button class="secondary-btn" id="setCurrentWeek" type="button">هذا الأسبوع</button>
+            <button class="primary-btn" id="refreshReport" type="button">تحديث التقرير</button>
+          </div>
+        </article>
+
+        <div class="stats-grid report-stats">
+          <article class="stat-card"><span>وزن الرولات</span><strong id="reportRaw">0</strong><small>كغم</small></article>
+          <article class="stat-card"><span>وزن الإنتاج</span><strong id="reportProductionWeight">0</strong><small>كغم</small></article>
+          <article class="stat-card"><span>المشاتيح</span><strong id="reportPallets">0</strong><small>مشتاح</small></article>
+          <article class="stat-card"><span>التوالف</span><strong id="reportWaste">0</strong><small>كغم</small></article>
+          <article class="stat-card"><span>نايلون شفاف</span><strong id="reportTransparentNylon">0</strong><small>كغم</small></article>
+          <article class="stat-card"><span>نايلون مطبوع - وزن</span><strong id="reportPrintedNylonWeight">0</strong><small>كغم</small></article>
+          <article class="stat-card"><span>نايلون مطبوع - رولات</span><strong id="reportPrintedNylonRolls">0</strong><small>رولة</small></article>
+        </div>
+
+        <article class="panel table-panel printable" id="printableWeeklyReport">
+          <div class="report-print-head">
+            <img src="assets/salima-logo.png" alt="سليمة" />
+            <div><h3>تقرير الإنتاج الأسبوعي</h3><p id="reportPeriodLabel"></p></div>
+          </div>
+          <div class="panel-head"><div><span class="eyebrow">يوميًا</span><h3>ملخص كل يوم</h3></div><div class="button-row"><button class="secondary-btn" id="exportWeeklyCsv" type="button">تصدير CSV</button><button class="secondary-btn" id="printWeeklyReport" type="button">طباعة / PDF</button></div></div>
+          <div class="table-scroll"><table class="data-table report-table"><thead><tr><th>اليوم / التاريخ</th><th>الأصناف</th><th>عدد الرولات</th><th>وزن الرولات</th><th>المشاتيح</th><th>وزن الإنتاج</th><th>شفاف كغم</th><th>مطبوع كغم</th><th>مطبوع رولات</th><th>التوالف</th></tr></thead><tbody id="weeklyDailyTable"></tbody><tfoot id="weeklyDailyFoot"></tfoot></table></div>
+          <div class="report-section"><h4>تفصيل حسب الصنف</h4><div class="table-scroll"><table class="data-table"><thead><tr><th>الصنف</th><th>المشاتيح</th><th>الشوالات</th><th>الحبات</th><th>الحبات الصغيرة</th><th>وزن الإنتاج</th></tr></thead><tbody id="weeklyProductTable"></tbody></table></div></div>
+        </article>
+
+        <article class="panel monthly-reconciliation">
+          <div class="panel-head"><div><span class="eyebrow">آخر الشهر</span><h3>مقارنة الوارد مع إدخال المهندس</h3></div><label class="month-picker">الشهر<input type="month" id="reconcileMonth" /></label></div>
+          <div class="reconcile-grid" id="reconcileCards"></div>
+          <p class="info-note">الرصيد هنا تقديري: إجمالي الوزن الداخل حسب المدير ناقص إجمالي وزن الرولات المسجل في الإنتاج. هذا الرقم مقارنة تشغيلية بين الوارد والمسجل بالإنتاج، ويمكن إضافة رصيد أول المدة وإقفال الشهر لاحقًا.</p>
+        </article>
+      </section>
+
+      <section class="view admin-only" id="view-records">
+        <div class="section-intro">
+          <div><span class="eyebrow">الأرشيف</span><h2>سجل الإنتاج</h2><p>كل يوم محفوظ مع الرولات والأوزان والإنتاج المحسوب. المدير يستطيع تعديل السجل أو حذفه، وتبقى البيانات محفوظة في قاعدة البيانات.</p></div>
+          <button class="secondary-btn" id="exportBackup" type="button">نسخة احتياطية JSON</button>
+        </div>
+        <article class="panel table-panel">
+          <div class="panel-head"><input class="search-input wide" id="recordSearch" placeholder="ابحث بالصنف، كود الرولة أو التاريخ..." /></div>
+          <div class="table-scroll"><table class="data-table"><thead><tr><th>التاريخ</th><th>الصنف</th><th>الوردية</th><th>الرولات</th><th>وزن الرولات</th><th>المشاتيح</th><th>وزن الإنتاج</th><th>نايلون شفاف</th><th>نايلون مطبوع</th><th>التوالف</th><th>إجراءات</th></tr></thead><tbody id="recordsTable"></tbody></table></div>
+        </article>
+      </section>
+
+      <section class="view admin-only" id="view-users">
+        <div class="section-intro">
+          <div><span class="eyebrow">الإدارة</span><h2>حسابات المستخدمين</h2><p>أنشئ حسابًا للمدير أو المهندس. المهندس يرى شاشة الإنتاج فقط، والمدير يملك صلاحيات الإدارة والتقارير.</p></div>
+        </div>
+        <div class="split-layout">
+          <article class="panel">
+            <div class="panel-head"><div><h3>إضافة مستخدم</h3><span class="muted">كلمة المرور تُرسل مباشرة إلى خدمة المصادقة ولا تُحفظ داخل الواجهة.</span></div></div>
+            <form id="userForm">
+              <div class="form-grid cols-2">
+                <label>الاسم الكامل<input type="text" id="newUserName" required /></label>
+                <label>البريد الإلكتروني<input type="email" id="newUserEmail" required /></label>
+                <label>الصلاحية<select id="newUserRole"><option value="engineer">مهندس</option><option value="admin">مدير</option></select></label>
+                <label>كلمة المرور المؤقتة<input type="password" id="newUserPassword" minlength="8" required /></label>
+              </div>
+              <div class="form-actions inside-form"><button class="primary-btn" type="submit" id="createUserBtn">إنشاء الحساب</button></div>
+            </form>
+          </article>
+          <article class="panel table-panel">
+            <div class="panel-head"><div><span class="eyebrow">الحسابات</span><h3>المستخدمون المسجلون</h3></div></div>
+            <div class="table-scroll"><table class="data-table"><thead><tr><th>الاسم</th><th>البريد</th><th>الصلاحية</th><th>الحالة</th></tr></thead><tbody id="usersTable"></tbody></table></div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
