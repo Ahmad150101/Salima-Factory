@@ -14,7 +14,9 @@
     products: DEFAULT_PRODUCTS,
     shipments: [],
     production: [],
-    profiles: []
+    profiles: [],
+    presence: [],
+    auditLogs: []
   };
 
   let state = cloneSeed();
@@ -23,6 +25,8 @@
   let db = null;
   let currentProductionEditId = null;
   let toastTimer = null;
+  let presenceTimer = null;
+  let lastProfileCheckAt = 0;
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -35,7 +39,7 @@
     authScreen: $('#authScreen'),
     appShell: $('#appShell'),
     loginForm: $('#loginForm'),
-    loginEmail: $('#loginEmail'),
+    loginUsername: $('#loginUsername'),
     loginPassword: $('#loginPassword'),
     loginBtn: $('#loginBtn'),
     authMessage: $('#authMessage'),
@@ -90,10 +94,11 @@
     themeToggleIcon: $('#themeToggleIcon'),
     themeToggleText: $('#themeToggleText'),
     userForm: $('#userForm'),
-    newUserName: $('#newUserName'),
-    newUserEmail: $('#newUserEmail'),
+    newUserFullName: $('#newUserFullName'),
+    newUsername: $('#newUsername'),
     newUserRole: $('#newUserRole'),
     newUserPassword: $('#newUserPassword'),
+    newUserPasswordConfirm: $('#newUserPasswordConfirm'),
     usersTable: $('#usersTable'),
     toast: $('#toast')
   };
@@ -105,7 +110,9 @@
     products: ['الإعدادات', 'الأصناف'],
     reports: ['الإدارة', 'التقارير'],
     records: ['الأرشيف', 'السجلات'],
-    users: ['الإدارة', 'المستخدمون']
+    users: ['الإدارة', 'إدارة المستخدمين'],
+    activity: ['الرقابة', 'سجل النشاط'],
+    system: ['الإدارة', 'إدارة النظام']
   };
 
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
@@ -140,7 +147,7 @@
     return { id: row.id, name: row.name, bagsPerPallet: Number(row.bags_per_pallet), packsPerBag: Number(row.packs_per_bag), unitsPerPack: Number(row.units_per_pack), unitWeightKg: Number(row.unit_weight_kg) };
   }
   function mapShipment(row) {
-    return { id: row.id, date: row.shipment_date, supplier: row.supplier || '', containerCount: Number(row.container_count), rollCount: Number(row.roll_count), totalWeight: Number(row.total_weight), ref: row.reference || '', notes: row.notes || '', updatedAt: row.updated_at };
+    return { id: row.id, date: row.shipment_date, supplier: row.supplier || '', containerCount: Number(row.container_count), rollCount: Number(row.roll_count), totalWeight: Number(row.total_weight), ref: row.reference || '', notes: row.notes || '', createdBy: row.created_by, updatedBy: row.updated_by, updatedAt: row.updated_at };
   }
   function mapProduction(row) {
     return { id: row.id, date: row.production_date, shift: row.shift, productId: row.product_id, productSnapshot: row.product_snapshot || null, rolls: Array.isArray(row.rolls) ? row.rolls : [], pallets: Number(row.pallets || 0), extraBags: Number(row.extra_bags || 0), transparentNylonWeight: Number(row.transparent_nylon_weight || 0), printedNylonMode: row.printed_nylon_mode || 'weight', printedNylonWeight: Number(row.printed_nylon_weight || 0), printedNylonRolls: Number(row.printed_nylon_rolls || 0), wasteWeight: Number(row.waste_weight || 0), wasteType: row.waste_type || 'قص وتعديل', notes: row.notes || '', createdBy: row.created_by, updatedAt: row.updated_at };
@@ -152,22 +159,29 @@
       db.from('products').select('*').eq('is_active', true).order('name'),
       db.from('production_records').select('*').order('production_date', { ascending: false })
     ];
-    if (currentRole === 'admin') {
+    if (['owner', 'admin'].includes(currentRole)) {
       queries.push(db.from('shipments').select('*').order('shipment_date', { ascending: false }));
-      queries.push(db.from('profiles').select('id,email,full_name,role,is_active,created_at').order('created_at'));
+    }
+    if (currentRole === 'owner') {
+      queries.push(db.from('profiles').select('id,username,full_name,role,is_active,last_login_at,last_activity_at,created_at,created_by').order('created_at'));
+      queries.push(db.from('user_presence').select('*'));
+      queries.push(db.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(250));
     }
     const results = await Promise.all(queries);
     const failed = results.find(r => r.error);
     if (failed) throw failed.error;
     state.products = results[0].data.map(mapProduct);
     state.production = results[1].data.map(mapProduction);
-    state.shipments = currentRole === 'admin' ? results[2].data.map(mapShipment) : [];
-    state.profiles = currentRole === 'admin' ? results[3].data : [];
+    let index = 2;
+    state.shipments = ['owner', 'admin'].includes(currentRole) ? results[index++].data.map(mapShipment) : [];
+    state.profiles = currentRole === 'owner' ? results[index++].data : [];
+    state.presence = currentRole === 'owner' ? results[index++].data : [];
+    state.auditLogs = currentRole === 'owner' ? results[index++].data : [];
     saveState();
   }
 
   async function getMyProfile(user) {
-    const { data, error } = await db.from('profiles').select('id,email,full_name,role,is_active').eq('id', user.id).single();
+    const { data, error } = await db.from('profiles').select('id,username,full_name,role,is_active').eq('id', user.id).single();
     if (error) throw error;
     return data;
   }
@@ -183,12 +197,13 @@
       }
       currentUser = { ...session.user, profile };
       setRole(profile.role);
-      els.userTitle.textContent = profile.full_name || (profile.role === 'admin' ? 'مدير المصنع' : 'مهندس الإنتاج');
+      els.userTitle.textContent = profile.full_name || (profile.role === 'owner' ? 'مالك النظام' : profile.role === 'admin' ? 'مدير المصنع' : 'مهندس الإنتاج');
       els.authScreen.classList.add('hidden');
       els.appShell.classList.remove('hidden');
       await loadRemoteState();
       renderAll();
       navigate('dashboard');
+      startPresence();
     } catch (error) {
       console.error(error);
       setAuthMessage(`تعذر تحميل الحساب: ${error.message || error}`, true);
@@ -201,7 +216,8 @@
     currentUser = null; currentRole = null; state = cloneSeed();
     els.appShell.classList.add('hidden');
     els.authScreen.classList.remove('hidden');
-    setAuthMessage('أدخل البريد الإلكتروني وكلمة المرور.');
+    if (presenceTimer) clearInterval(presenceTimer);
+    setAuthMessage('أدخل اسم المستخدم وكلمة المرور.');
   }
 
   async function handleLogin(event) {
@@ -209,16 +225,46 @@
     if (!db) return;
     els.loginBtn.disabled = true;
     setAuthMessage('جاري تسجيل الدخول...');
-    const { data, error } = await db.auth.signInWithPassword({ email: els.loginEmail.value.trim(), password: els.loginPassword.value });
+    const username = els.loginUsername.value.trim().toLowerCase();
+    if (!/^[a-z0-9_]{3,30}$/.test(username)) {
+      els.loginBtn.disabled = false;
+      return setAuthMessage('اسم المستخدم أو كلمة المرور غير صحيحة', true);
+    }
+    const { data, error } = await db.functions.invoke('login-by-username', { body: { username, password: els.loginPassword.value } });
     els.loginBtn.disabled = false;
-    if (error) return setAuthMessage('بيانات الدخول غير صحيحة أو الحساب غير متاح.', true);
-    await activateSession(data.session);
+    if (error || data?.error || !data?.access_token || !data?.refresh_token) return setAuthMessage('اسم المستخدم أو كلمة المرور غير صحيحة', true);
+    const { data: sessionData, error: sessionError } = await db.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token });
+    if (sessionError) return setAuthMessage('اسم المستخدم أو كلمة المرور غير صحيحة', true);
+    await activateSession(sessionData.session);
     els.loginForm.reset();
   }
 
   async function handleLogout() {
     if (db) await db.auth.signOut();
     showLogin();
+  }
+
+  async function updatePresence(page = $('.view.active')?.id?.replace('view-', '') || 'dashboard') {
+    if (!db || !currentUser) return;
+    const nowMs = Date.now();
+    if (nowMs - lastProfileCheckAt >= 60000) {
+      lastProfileCheckAt = nowMs;
+      const { data: profile, error: profileError } = await db.from('profiles').select('role,is_active').eq('id', currentUser.id).single();
+      if (profileError || !profile?.is_active) {
+        await db.auth.signOut();
+        return;
+      }
+      if (profile.role !== currentRole) setRole(profile.role);
+    }
+    const now = new Date().toISOString();
+    const { error } = await db.from('user_presence').upsert({ user_id: currentUser.id, last_seen_at: now, updated_at: now, current_page: page });
+    if (error) console.warn('Presence update failed', error.message || error);
+  }
+
+  function startPresence() {
+    if (presenceTimer) clearInterval(presenceTimer);
+    updatePresence();
+    presenceTimer = setInterval(() => updatePresence(), 60000);
   }
 
   async function initCloud() {
@@ -238,7 +284,7 @@
     const { error } = await db.from('products').upsert(payload); if (error) throw error;
   }
   async function dbUpsertShipment(shipment) {
-    const payload = { id: shipment.id, shipment_date: shipment.date, supplier: shipment.supplier || null, container_count: shipment.containerCount, roll_count: shipment.rollCount, total_weight: shipment.totalWeight, reference: shipment.ref || null, notes: shipment.notes || null, created_by: currentUser.id };
+    const payload = { id: shipment.id, shipment_date: shipment.date, supplier: shipment.supplier || null, container_count: shipment.containerCount, roll_count: shipment.rollCount, total_weight: shipment.totalWeight, reference: shipment.ref || null, notes: shipment.notes || null, created_by: shipment.createdBy || currentUser.id };
     const { error } = await db.from('shipments').upsert(payload); if (error) throw error;
   }
   async function dbUpsertProduction(record) {
@@ -347,6 +393,7 @@
 
   function navigate(view) {
     if (currentRole === 'engineer' && !['dashboard', 'production'].includes(view)) view = 'dashboard';
+    if (currentRole === 'admin' && ['users', 'activity', 'system'].includes(view)) view = 'dashboard';
     $$('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`));
     $$('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view));
     const [eyebrow, title] = viewMeta[view] || viewMeta.dashboard;
@@ -358,15 +405,19 @@
     if (view === 'shipments') renderShipments();
     if (view === 'products') renderProducts();
     if (view === 'users') renderUsers();
+    if (view === 'activity') renderAuditLog();
+    if (currentUser) updatePresence(view);
   }
 
   function setRole(role) {
-    currentRole = role === 'admin' ? 'admin' : 'engineer';
-    const isAdmin = currentRole === 'admin';
-    $$('.admin-only').forEach(el => el.classList.toggle('hidden', !isAdmin));
-    els.roleLabel.textContent = isAdmin ? 'مدير' : 'مهندس';
+    currentRole = ['owner', 'admin', 'engineer'].includes(role) ? role : 'engineer';
+    const isManagement = ['owner', 'admin'].includes(currentRole);
+    const isOwner = currentRole === 'owner';
+    $$('.admin-only').forEach(el => el.classList.toggle('hidden', !isManagement));
+    $$('.owner-only').forEach(el => el.classList.toggle('hidden', !isOwner));
+    els.roleLabel.textContent = isOwner ? 'مالك' : currentRole === 'admin' ? 'مدير' : 'مهندس';
     const activeAdminView = $('.view.active.admin-only');
-    if (!isAdmin && activeAdminView) navigate('dashboard');
+    if (!isManagement && activeAdminView) navigate('dashboard');
   }
 
   function renderProductOptions() {
@@ -524,6 +575,7 @@
     const shipment = { id, date: els.shipmentDate.value, supplier: els.shipmentSupplier.value.trim(), containerCount: Number(els.containerCount.value || 0), rollCount: Number(els.shipmentRollCount.value || 0), totalWeight: Number(els.shipmentTotalWeight.value || 0), ref: els.shipmentRef.value.trim(), notes: els.shipmentNotes.value.trim(), updatedAt: new Date().toISOString() };
     if (!shipment.date || shipment.containerCount < 1 || shipment.rollCount < 1 || shipment.totalWeight <= 0) return toast('أكمل بيانات الشحنة والأرقام بشكل صحيح.');
     const existing = state.shipments.find(s => s.id === id);
+    if (existing?.createdBy) shipment.createdBy = existing.createdBy;
     try { await dbUpsertShipment(shipment); await loadRemoteState(); toast(existing ? 'تم تحديث الشحنة.' : 'تم حفظ الشحنة في قاعدة البيانات.'); resetShipmentForm(); renderAll(); }
     catch (error) { console.error(error); toast(`تعذر الحفظ: ${error.message || error}`); }
   }
@@ -610,6 +662,17 @@
     renderRecentProduction();
     renderMonthlyInboundSummary();
     renderWeeklySummary();
+    if (currentRole === 'owner') renderOwnerDashboard();
+  }
+
+  function renderOwnerDashboard() {
+    const cutoff = Date.now() - 3 * 60 * 1000;
+    const online = state.presence.filter(p => new Date(p.last_seen_at).getTime() >= cutoff);
+    $('#statOnlineUsers').textContent = online.length;
+    $('#statTotalUsers').textContent = state.profiles.length;
+    const names = new Map(state.profiles.map(p => [p.id, p.full_name || p.username || '—']));
+    $('#onlineUsers').innerHTML = online.length ? online.map(p => `<div class="activity-item"><div><strong>${escapeHtml(names.get(p.user_id) || '—')}</strong><span>${escapeHtml(p.current_page)}</span></div><span class="status-chip">متصل الآن</span></div>`).join('') : '<div class="empty-state">لا يوجد مستخدمون متصلون الآن.</div>';
+    $('#recentAudit').innerHTML = state.auditLogs.slice(0, 6).map(x => `<div class="activity-item"><div><strong>${escapeHtml(names.get(x.user_id) || 'النظام')}</strong><span>${escapeHtml(`${x.action} · ${x.entity_type}`)}</span></div><small>${formatTimestamp(x.created_at)}</small></div>`).join('') || '<div class="empty-state">لا يوجد نشاط حديث.</div>';
   }
 
   function renderSevenDayChart() {
@@ -815,14 +878,72 @@
 
   function renderUsers() {
     if (!els.usersTable) return;
-    els.usersTable.innerHTML = state.profiles.length ? state.profiles.map(p => `<tr><td>${escapeHtml(p.full_name || '—')}</td><td>${escapeHtml(p.email || '—')}</td><td><span class="status-chip">${p.role === 'admin' ? 'مدير' : 'مهندس'}</span></td><td>${p.is_active ? 'نشط' : 'موقوف'}</td></tr>`).join('') : `<tr><td colspan="4"><div class="empty-state">لا توجد حسابات ظاهرة.</div></td></tr>`;
+    const names = new Map(state.profiles.map(p => [p.id, p.full_name || p.username]));
+    const roleName = role => ({ owner: 'مالك', admin: 'مدير', engineer: 'مهندس' }[role] || role);
+    els.usersTable.innerHTML = state.profiles.length ? state.profiles.map(p => `<tr><td>${escapeHtml(p.full_name || '—')}</td><td>${escapeHtml(p.username || 'غير معيّن')}</td><td><span class="status-chip">${roleName(p.role)}</span></td><td>${p.is_active ? 'نشط' : 'موقوف'}</td><td>${formatTimestamp(p.last_login_at)}</td><td>${formatTimestamp(p.last_activity_at)}</td><td>${escapeHtml(names.get(p.created_by) || '—')}</td><td><div class="action-cell"><button class="icon-btn" data-edit-user="${p.id}">تعديل</button><button class="icon-btn" data-reset-password="${p.id}">كلمة المرور</button></div></td></tr>`).join('') : `<tr><td colspan="8"><div class="empty-state">لا توجد حسابات ظاهرة.</div></td></tr>`;
+    $$('[data-edit-user]').forEach(btn => btn.addEventListener('click', () => editUser(btn.dataset.editUser)));
+    $$('[data-reset-password]').forEach(btn => btn.addEventListener('click', () => resetUserPassword(btn.dataset.resetPassword)));
+    const auditUser = $('#auditUser');
+    if (auditUser) {
+      const selected = auditUser.value;
+      auditUser.innerHTML = '<option value="">الكل</option>' + state.profiles.map(p => `<option value="${p.id}">${escapeHtml(p.full_name || p.username || '—')}</option>`).join('');
+      auditUser.value = selected;
+    }
+  }
+
+  function formatTimestamp(value) {
+    return value ? new Intl.DateTimeFormat('ar-PS', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : '—';
+  }
+
+  async function editUser(id) {
+    const user = state.profiles.find(p => p.id === id);
+    if (!user) return;
+    const fullName = prompt('الاسم الكامل', user.full_name || '');
+    if (fullName === null) return;
+    const role = prompt('الصلاحية: owner أو admin أو engineer', user.role);
+    if (role === null || !['owner', 'admin', 'engineer'].includes(role)) return toast('الصلاحية غير صحيحة.');
+    const activeAnswer = prompt('الحالة: active أو inactive', user.is_active ? 'active' : 'inactive');
+    if (activeAnswer === null || !['active', 'inactive'].includes(activeAnswer)) return toast('الحالة غير صحيحة.');
+    try {
+      const { data, error } = await db.functions.invoke('manage-user', { body: { user_id: id, full_name: fullName.trim(), role, is_active: activeAnswer === 'active' } });
+      if (error || data?.error) throw new Error(data?.error || error.message);
+      await loadRemoteState(); renderUsers(); toast('تم تحديث المستخدم.');
+    } catch (error) { toast(error.message || 'تعذر تحديث المستخدم.'); }
+  }
+
+  async function resetUserPassword(id) {
+    const password = prompt('كلمة المرور الجديدة (8 أحرف على الأقل)');
+    if (password === null) return;
+    if (password.length < 8) return toast('كلمة المرور قصيرة.');
+    try {
+      const { data, error } = await db.functions.invoke('reset-user-password', { body: { user_id: id, new_password: password } });
+      if (error || data?.error) throw new Error(data?.error || error.message);
+      toast('تم تحديث كلمة المرور.');
+    } catch (error) { toast(error.message || 'تعذر تحديث كلمة المرور.'); }
+  }
+
+  function renderAuditLog() {
+    const table = $('#auditTable');
+    if (!table) return;
+    const names = new Map(state.profiles.map(p => [p.id, p.full_name || p.username || '—']));
+    const user = $('#auditUser')?.value || '';
+    const date = $('#auditDate')?.value || '';
+    const action = $('#auditAction')?.value || '';
+    const entity = $('#auditEntity')?.value || '';
+    const rows = state.auditLogs.filter(x => (!user || x.user_id === user) && (!date || String(x.created_at).startsWith(date)) && (!action || x.action === action) && (!entity || x.entity_type === entity));
+    table.innerHTML = rows.length ? rows.map(x => `<tr><td>${escapeHtml(names.get(x.user_id) || 'النظام')}</td><td>${escapeHtml(x.action)}</td><td>${escapeHtml(x.entity_type)}</td><td>${formatTimestamp(x.created_at)}</td><td><button class="icon-btn" data-audit-detail="${x.id}">عرض التفاصيل</button></td></tr>`).join('') : '<tr><td colspan="5"><div class="empty-state">لا توجد عمليات مطابقة.</div></td></tr>';
+    $$('[data-audit-detail]').forEach(btn => btn.addEventListener('click', () => {
+      const row = state.auditLogs.find(x => String(x.id) === btn.dataset.auditDetail);
+      if (row) alert(`قبل:\n${JSON.stringify(row.old_data, null, 2)}\n\nبعد:\n${JSON.stringify(row.new_data, null, 2)}`);
+    }));
   }
 
   async function createUserAccount(event) {
     event.preventDefault();
-    if (currentRole !== 'admin') return;
-    const payload = { full_name: els.newUserName.value.trim(), email: els.newUserEmail.value.trim(), role: els.newUserRole.value, password: els.newUserPassword.value };
-    if (!payload.full_name || !payload.email || payload.password.length < 8) return toast('أدخل الاسم والبريد وكلمة مرور 8 أحرف على الأقل.');
+    if (currentRole !== 'owner') return;
+    const payload = { full_name: els.newUserFullName.value.trim(), username: els.newUsername.value.trim().toLowerCase(), role: els.newUserRole.value, password: els.newUserPassword.value };
+    if (!payload.full_name || !/^[a-z0-9_]{3,30}$/.test(payload.username) || payload.password.length < 8) return toast('تحقق من الاسم واسم المستخدم وكلمة المرور.');
+    if (payload.password !== els.newUserPasswordConfirm.value) return toast('كلمتا المرور غير متطابقتين.');
     try {
       $('#createUserBtn').disabled = true;
       const { data, error } = await db.functions.invoke('create-user', { body: payload });
@@ -842,7 +963,7 @@
     renderProducts();
     renderReports();
     renderRecords();
-    if (currentRole === 'admin') renderUsers();
+    if (currentRole === 'owner') { renderUsers(); renderAuditLog(); }
   }
 
   function exportWeeklyCsv() {
@@ -918,6 +1039,8 @@
     $('#recordSearch').addEventListener('input', renderRecords);
     $('#exportBackup').addEventListener('click', exportBackup);
     els.userForm.addEventListener('submit', createUserAccount);
+    ['auditUser', 'auditDate', 'auditAction', 'auditEntity'].forEach(id => $(`#${id}`)?.addEventListener('change', renderAuditLog));
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && currentUser) updatePresence(); });
   }
 
   function initDates() {

@@ -1,0 +1,11 @@
+[functions.login-by-username]
+verify_jwt = false
+
+[functions.create-user]
+verify_jwt = true
+
+[functions.manage-user]
+verify_jwt = true
+
+[functions.reset-user-password]
+verify_jwt = true

@@ -16,7 +16,7 @@
       <h1>تسجيل الدخول</h1>
       <p>ادخل بحساب المدير أو المهندس للوصول إلى نظام إدارة الإنتاج.</p>
       <form id="loginForm" class="auth-form">
-        <label>البريد الإلكتروني<input type="email" id="loginEmail" autocomplete="username" required placeholder="name@salima.com" /></label>
+        <label>اسم المستخدم<input type="text" id="loginUsername" autocomplete="username" required minlength="3" maxlength="30" pattern="[a-zA-Z0-9_]+" placeholder="username" /></label>
         <label>كلمة المرور<input type="password" id="loginPassword" autocomplete="current-password" required minlength="6" placeholder="••••••••" /></label>
         <button type="submit" class="primary-btn" id="loginBtn">دخول</button>
       </form>
@@ -43,7 +43,9 @@
         <button class="nav-item admin-only" data-view="products"><span class="nav-icon">◫</span><span>الأصناف</span></button>
         <button class="nav-item admin-only" data-view="reports"><span class="nav-icon">▤</span><span>التقارير</span></button>
         <button class="nav-item admin-only" data-view="records"><span class="nav-icon">⌕</span><span>السجلات</span></button>
-        <button class="nav-item admin-only" data-view="users"><span class="nav-icon">♙</span><span>المستخدمون</span></button>
+        <button class="nav-item owner-only" data-view="users"><span class="nav-icon">♙</span><span>إدارة المستخدمين</span></button>
+        <button class="nav-item owner-only" data-view="activity"><span class="nav-icon">◎</span><span>سجل النشاط</span></button>
+        <button class="nav-item owner-only" data-view="system"><span class="nav-icon">⚙</span><span>إدارة النظام</span></button>
       </nav>
 
       <div class="sidebar-footer">
@@ -82,10 +84,17 @@
         </div>
 
         <div class="stats-grid">
+          <article class="stat-card owner-only"><div class="stat-head"><span>المستخدمون المتصلون الآن</span><span class="stat-icon">●</span></div><strong id="statOnlineUsers">0</strong><small>مستخدم</small><div class="stat-foot">نشاط خلال آخر 3 دقائق</div></article>
+          <article class="stat-card owner-only"><div class="stat-head"><span>إجمالي المستخدمين</span><span class="stat-icon">♙</span></div><strong id="statTotalUsers">0</strong><small>حساب</small><div class="stat-foot">الحسابات المسجلة</div></article>
           <article class="stat-card"><div class="stat-head"><span>وزن إنتاج اليوم</span><span class="stat-icon">▦</span></div><strong id="statProductionWeight">0</strong><small>كغم</small><div class="stat-foot" id="statProductionFoot">حسب تركيبة الصنف</div></article>
           <article class="stat-card"><div class="stat-head"><span>وزن الرولات اليوم</span><span class="stat-icon">◉</span></div><strong id="statRawWeight">0</strong><small>كغم</small><div class="stat-foot" id="statRawFoot">من إدخال المهندس</div></article>
           <article class="stat-card"><div class="stat-head"><span>التوالف اليوم</span><span class="stat-icon">△</span></div><strong id="statWaste">0</strong><small>كغم</small><div class="stat-foot" id="statWasteFoot">0% من وزن الرولات</div></article>
           <article class="stat-card admin-only"><div class="stat-head"><span>رصيد الخام التقديري</span><span class="stat-icon">◫</span></div><strong id="statBalance">0</strong><small>كغم</small><div class="stat-foot" id="statBalanceFoot">الوارد − المسجل بالإنتاج</div></article>
+        </div>
+
+        <div class="dashboard-grid owner-only">
+          <article class="panel"><div class="panel-head"><div><span class="eyebrow">Presence</span><h3>المستخدمون المتصلون الآن</h3></div></div><div id="onlineUsers" class="activity-list"></div></article>
+          <article class="panel"><div class="panel-head"><div><span class="eyebrow">Audit</span><h3>آخر التعديلات</h3></div><button class="text-btn" data-go="activity">عرض الكل</button></div><div id="recentAudit" class="activity-list"></div></article>
         </div>
 
         <div class="dashboard-grid">
@@ -288,7 +297,7 @@
         </article>
       </section>
 
-      <section class="view admin-only" id="view-users">
+      <section class="view owner-only" id="view-users">
         <div class="section-intro">
           <div><span class="eyebrow">الإدارة</span><h2>حسابات المستخدمين</h2><p>أنشئ حسابًا للمدير أو المهندس. المهندس يرى شاشة الإنتاج فقط، والمدير يملك صلاحيات الإدارة والتقارير.</p></div>
         </div>
@@ -297,25 +306,42 @@
             <div class="panel-head"><div><h3>إضافة مستخدم</h3><span class="muted">كلمة المرور تُرسل مباشرة إلى خدمة المصادقة ولا تُحفظ داخل الواجهة.</span></div></div>
             <form id="userForm">
               <div class="form-grid cols-2">
-                <label>الاسم الكامل<input type="text" id="newUserName" required /></label>
-                <label>البريد الإلكتروني<input type="email" id="newUserEmail" required /></label>
-                <label>الصلاحية<select id="newUserRole"><option value="engineer">مهندس</option><option value="admin">مدير</option></select></label>
+                <label>الاسم الكامل<input type="text" id="newUserFullName" required /></label>
+                <label>اسم المستخدم<input type="text" id="newUsername" minlength="3" maxlength="30" pattern="[a-zA-Z0-9_]+" required /></label>
+                <label>الصلاحية<select id="newUserRole"><option value="engineer">مهندس</option><option value="admin">مدير</option><option value="owner">مالك</option></select></label>
                 <label>كلمة المرور المؤقتة<input type="password" id="newUserPassword" minlength="8" required /></label>
+                <label>تأكيد كلمة المرور<input type="password" id="newUserPasswordConfirm" minlength="8" required /></label>
               </div>
               <div class="form-actions inside-form"><button class="primary-btn" type="submit" id="createUserBtn">إنشاء الحساب</button></div>
             </form>
           </article>
           <article class="panel table-panel">
             <div class="panel-head"><div><span class="eyebrow">الحسابات</span><h3>المستخدمون المسجلون</h3></div></div>
-            <div class="table-scroll"><table class="data-table"><thead><tr><th>الاسم</th><th>البريد</th><th>الصلاحية</th><th>الحالة</th></tr></thead><tbody id="usersTable"></tbody></table></div>
+            <div class="table-scroll"><table class="data-table"><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>الصلاحية</th><th>الحالة</th><th>آخر دخول</th><th>آخر نشاط</th><th>أنشئ بواسطة</th><th>إجراءات</th></tr></thead><tbody id="usersTable"></tbody></table></div>
           </article>
         </div>
+      </section>
+
+      <section class="view owner-only" id="view-activity">
+        <div class="section-intro"><div><span class="eyebrow">الرقابة</span><h2>سجل النشاط</h2><p>آخر العمليات المسجلة مع إمكانية التصفية وعرض تفاصيل التغييرات.</p></div></div>
+        <article class="panel report-controls"><div class="report-filter">
+          <label>المستخدم<select id="auditUser"><option value="">الكل</option></select></label>
+          <label>التاريخ<input type="date" id="auditDate" /></label>
+          <label>العملية<select id="auditAction"><option value="">الكل</option><option>INSERT</option><option>UPDATE</option><option>DELETE</option><option>PASSWORD_RESET</option></select></label>
+          <label>نوع السجل<select id="auditEntity"><option value="">الكل</option><option value="production_records">production</option><option value="shipments">shipment</option><option value="products">product</option><option value="profiles">profile</option></select></label>
+        </div></article>
+        <article class="panel table-panel"><div class="table-scroll"><table class="data-table"><thead><tr><th>المستخدم</th><th>العملية</th><th>السجل</th><th>الوقت</th><th>التفاصيل</th></tr></thead><tbody id="auditTable"></tbody></table></div></article>
+      </section>
+
+      <section class="view owner-only" id="view-system">
+        <div class="section-intro"><div><span class="eyebrow">المالك فقط</span><h2>إدارة النظام</h2><p>روابط الإدارة الخارجية الآمنة.</p></div></div>
+        <div class="dashboard-grid"><article class="panel"><h3>قاعدة البيانات</h3><p class="muted">فتح لوحة مشروع Supabase في نافذة جديدة.</p><a class="primary-btn" target="_blank" rel="noopener noreferrer" href="https://supabase.com/dashboard/project/vahiafnjimmtokacmwwd">فتح قاعدة البيانات</a></article><article class="panel"><h3>GitHub</h3><p class="muted">فتح مستودع المشروع في نافذة جديدة.</p><a class="secondary-btn" target="_blank" rel="noopener noreferrer" href="https://github.com/Ahmad150101/Salima-Factory">فتح GitHub</a></article></div>
       </section>
     </main>
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4"></script>
   <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
