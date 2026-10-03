@@ -67,6 +67,7 @@
     productionFormTitle: $('#productionFormTitle'),
     saveProductionBtn: $('#saveProductionBtn'),
     cancelProductionEdit: $('#cancelProductionEdit'),
+    engineerSaveDialog: $('#engineerSaveDialog'),
     shipmentForm: $('#shipmentForm'),
     shipmentEditId: $('#shipmentEditId'),
     shipmentDate: $('#shipmentDate'),
@@ -150,7 +151,7 @@
     return { id: row.id, date: row.shipment_date, supplier: row.supplier || '', containerCount: Number(row.container_count), rollCount: Number(row.roll_count), totalWeight: Number(row.total_weight), ref: row.reference || '', notes: row.notes || '', createdBy: row.created_by, updatedBy: row.updated_by, updatedAt: row.updated_at };
   }
   function mapProduction(row) {
-    return { id: row.id, date: row.production_date, shift: row.shift, productId: row.product_id, productSnapshot: row.product_snapshot || null, rolls: Array.isArray(row.rolls) ? row.rolls : [], pallets: Number(row.pallets || 0), extraBags: Number(row.extra_bags || 0), transparentNylonWeight: Number(row.transparent_nylon_weight || 0), printedNylonMode: row.printed_nylon_mode || 'weight', printedNylonWeight: Number(row.printed_nylon_weight || 0), printedNylonRolls: Number(row.printed_nylon_rolls || 0), wasteWeight: Number(row.waste_weight || 0), wasteType: row.waste_type || 'قص وتعديل', notes: row.notes || '', createdBy: row.created_by, updatedAt: row.updated_at };
+    return { id: row.id, date: row.production_date, shift: row.shift, productId: row.product_id, productSnapshot: row.product_snapshot || null, rolls: Array.isArray(row.rolls) ? row.rolls : [], pallets: Number(row.pallets || 0), extraBags: Number(row.extra_bags || 0), transparentNylonWeight: Number(row.transparent_nylon_weight || 0), printedNylonMode: row.printed_nylon_mode || 'weight', printedNylonWeight: Number(row.printed_nylon_weight || 0), printedNylonRolls: Number(row.printed_nylon_rolls || 0), wasteWeight: Number(row.waste_weight || 0), wasteType: row.waste_type || 'لا يوجد', notes: row.notes || '', createdBy: row.created_by, updatedBy: row.updated_by, createdAt: row.created_at, updatedAt: row.updated_at };
   }
 
   async function loadRemoteState() {
@@ -162,8 +163,11 @@
     if (['owner', 'admin'].includes(currentRole)) {
       queries.push(db.from('shipments').select('*').order('shipment_date', { ascending: false }));
     }
+    if (['owner', 'admin'].includes(currentRole)) {
+      const columns = currentRole === 'owner' ? 'id,username,full_name,role,is_active,last_login_at,last_activity_at,created_at,created_by' : 'id,username,full_name';
+      queries.push(db.from('profiles').select(columns).order('full_name'));
+    }
     if (currentRole === 'owner') {
-      queries.push(db.from('profiles').select('id,username,full_name,role,is_active,last_login_at,last_activity_at,created_at,created_by').order('created_at'));
       queries.push(db.from('user_presence').select('*'));
       queries.push(db.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(250));
     }
@@ -174,7 +178,7 @@
     state.production = results[1].data.map(mapProduction);
     let index = 2;
     state.shipments = ['owner', 'admin'].includes(currentRole) ? results[index++].data.map(mapShipment) : [];
-    state.profiles = currentRole === 'owner' ? results[index++].data : [];
+    state.profiles = ['owner', 'admin'].includes(currentRole) ? results[index++].data : [];
     state.presence = currentRole === 'owner' ? results[index++].data : [];
     state.auditLogs = currentRole === 'owner' ? results[index++].data : [];
     saveState();
@@ -288,8 +292,12 @@
     const { error } = await db.from('shipments').upsert(payload); if (error) throw error;
   }
   async function dbUpsertProduction(record) {
-    const payload = { id: record.id, production_date: record.date, shift: record.shift, product_id: record.productId, product_snapshot: record.productSnapshot, rolls: record.rolls, pallets: record.pallets, extra_bags: record.extraBags, transparent_nylon_weight: record.transparentNylonWeight, printed_nylon_mode: record.printedNylonMode, printed_nylon_weight: record.printedNylonWeight, printed_nylon_rolls: record.printedNylonRolls, waste_weight: record.wasteWeight, waste_type: record.wasteType, notes: record.notes || null, created_by: record.createdBy || currentUser.id };
-    const { error } = await db.from('production_records').upsert(payload); if (error) throw error;
+    const payload = { production_date: record.date, shift: record.shift, product_id: record.productId, product_snapshot: record.productSnapshot, rolls: record.rolls, pallets: record.pallets, extra_bags: record.extraBags, transparent_nylon_weight: record.transparentNylonWeight, printed_nylon_mode: record.printedNylonMode, printed_nylon_weight: record.printedNylonWeight, printed_nylon_rolls: record.printedNylonRolls, waste_weight: record.wasteWeight, waste_type: record.wasteType, notes: record.notes };
+    const query = record.isUpdate
+      ? db.from('production_records').update(payload).eq('id', record.id)
+      : db.from('production_records').insert({ id: record.id, ...payload });
+    const { error } = await query;
+    if (error) throw error;
   }
   async function dbDelete(table, id) { const { error } = await db.from(table).delete().eq('id', id); if (error) throw error; }
 
@@ -308,18 +316,17 @@
 
   function updatePrintedNylonMode() {
     const byWeight = els.printedNylonMode.value === 'weight';
+    const strict = currentRole === 'engineer';
     els.printedNylonWeightWrap.classList.toggle('hidden', !byWeight);
     els.printedNylonRollsWrap.classList.toggle('hidden', byWeight);
-    if (byWeight) els.printedNylonRolls.value = 0;
-    else els.printedNylonWeight.value = 0;
+    els.printedNylonWeight.required = strict && byWeight;
+    els.printedNylonRolls.required = strict && !byWeight;
   }
 
   function uid() { return crypto.randomUUID(); }
 
   function isoToday() {
-    const d = new Date();
-    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
-    return local.toISOString().slice(0, 10);
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hebron', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   }
 
   function formatDate(iso, withDay = false) {
@@ -392,7 +399,7 @@
   }
 
   function navigate(view) {
-    if (currentRole === 'engineer' && !['dashboard', 'production'].includes(view)) view = 'dashboard';
+    if (currentRole === 'engineer' && !['dashboard', 'production', 'records'].includes(view)) view = 'dashboard';
     if (currentRole === 'admin' && ['users', 'activity', 'system'].includes(view)) view = 'dashboard';
     $$('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`));
     $$('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view));
@@ -416,8 +423,17 @@
     $$('.admin-only').forEach(el => el.classList.toggle('hidden', !isManagement));
     $$('.owner-only').forEach(el => el.classList.toggle('hidden', !isOwner));
     els.roleLabel.textContent = isOwner ? 'مالك' : currentRole === 'admin' ? 'مدير' : 'مهندس';
+    updateProductionRequiredState();
     const activeAdminView = $('.view.active.admin-only');
     if (!isManagement && activeAdminView) navigate('dashboard');
+  }
+
+  function updateProductionRequiredState() {
+    const strict = currentRole === 'engineer';
+    [els.palletsProduced, els.extraBags, els.transparentNylonWeight, els.wasteWeight, els.wasteType, els.prodNotes]
+      .forEach(field => { field.required = strict; });
+    $$('.roll-code, .roll-weight', els.productionRollRows).forEach(field => { field.required = strict; });
+    updatePrintedNylonMode();
   }
 
   function renderProductOptions() {
@@ -437,6 +453,7 @@
     $('.remove-row', tr).addEventListener('click', () => { tr.remove(); ensureProductionRow(); updateRawTotal(); });
     $('.roll-weight', tr).addEventListener('input', updateRawTotal);
     els.productionRollRows.appendChild(tr);
+    $$('.roll-code, .roll-weight', tr).forEach(field => { field.required = currentRole === 'engineer'; });
     updateRawTotal();
   }
 
@@ -478,10 +495,14 @@
     currentProductionEditId = null;
     els.productionForm.reset();
     els.prodDate.value = isoToday();
-    els.transparentNylonWeight.value = 0;
+    els.extraBags.value = '';
+    els.transparentNylonWeight.value = '';
     els.printedNylonMode.value = 'weight';
-    els.printedNylonWeight.value = 0;
-    els.printedNylonRolls.value = 0;
+    els.printedNylonWeight.value = '';
+    els.printedNylonRolls.value = '';
+    els.wasteWeight.value = '';
+    els.wasteType.value = 'لا يوجد';
+    els.prodNotes.value = '';
     updatePrintedNylonMode();
     els.productionRollRows.innerHTML = '';
     addProductionRollRow();
@@ -493,26 +514,166 @@
     updateProductionCalculation();
   }
 
+  function clearProductionErrors() {
+    $$('.field-error', els.productionForm).forEach(field => field.classList.remove('field-error'));
+    $$('.validation-error', els.productionForm).forEach(row => row.classList.remove('validation-error'));
+  }
+
+  function productionError(message, field) {
+    clearProductionErrors();
+    if (field) {
+      field.classList.add('field-error');
+      field.closest('tr')?.classList.add('validation-error');
+      field.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setTimeout(() => field.focus({ preventScroll: true }), 250);
+    }
+    toast(message);
+    return null;
+  }
+
+  function requiredNumber(field, label, { min = 0, integer = false, positive = false } = {}) {
+    const raw = field.value.trim();
+    if (raw === '') return productionError(`يرجى تعبئة ${label}`, field);
+    const value = Number(raw);
+    if (!Number.isFinite(value) || (integer && !Number.isInteger(value)) || (positive ? value <= 0 : value < min)) {
+      return productionError(`يرجى إدخال قيمة صحيحة في ${label}`, field);
+    }
+    return value;
+  }
+
+  function optionalNumber(field, label, { min = 0, integer = false } = {}) {
+    const raw = field.value.trim();
+    if (raw === '') return 0;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || (integer && !Number.isInteger(value)) || value < min) {
+      return productionError(`يرجى إدخال قيمة صحيحة في ${label}`, field);
+    }
+    return value;
+  }
+
+  function validateProductionForm() {
+    clearProductionErrors();
+    const strict = currentRole === 'engineer';
+
+    if (!els.prodDate.value) return productionError('يرجى اختيار تاريخ الإنتاج', els.prodDate);
+    if (!els.prodShift.value.trim()) return productionError('يرجى اختيار الوردية', els.prodShift);
+    const product = getProduct(els.prodProduct.value);
+    if (!product) return productionError('يرجى اختيار المنتج', els.prodProduct);
+
+    const rows = $$('tr', els.productionRollRows);
+    const rolls = [];
+    const seenCodes = new Set();
+
+    if (strict && !rows.length) return productionError('يرجى إضافة رولة واحدة على الأقل', $('#addRollRow'));
+
+    for (const row of rows) {
+      const codeField = $('.roll-code', row);
+      const weightField = $('.roll-weight', row);
+      const code = codeField.value.trim();
+      const weightRaw = weightField.value.trim();
+      const note = $('.roll-note', row).value.trim();
+
+      if (!strict && !code && !weightRaw && !note) continue;
+
+      if (strict && !code) return productionError('يرجى إدخال كود الرولة', codeField);
+      if (strict && !weightRaw) return productionError(`يرجى إدخال وزن الرولة ${code || ''}`.trim(), weightField);
+
+      const weight = weightRaw === '' ? 0 : Number(weightRaw);
+      if (!Number.isFinite(weight) || weight < 0 || (strict && weight <= 0)) {
+        return productionError(code ? `يرجى إدخال وزن صحيح للرولة ${code}` : 'يرجى إدخال وزن صحيح للرولة', weightField);
+      }
+
+      if (strict) {
+        const normalizedCode = code.toLocaleLowerCase('en-US');
+        if (seenCodes.has(normalizedCode)) return productionError(`كود الرولة ${code} مكرر داخل السجل`, codeField);
+        seenCodes.add(normalizedCode);
+      }
+
+      rolls.push({ code, weight, note });
+    }
+
+    let pallets;
+    let extraBags;
+    let transparentNylonWeight;
+    let printedNylonWeight = 0;
+    let printedNylonRolls = 0;
+    let wasteWeight;
+
+    if (strict) {
+      pallets = requiredNumber(els.palletsProduced, 'عدد المشاتيح', { integer: true, positive: true });
+      if (pallets === null) return null;
+      extraBags = requiredNumber(els.extraBags, 'الأكياس الإضافية', { integer: true });
+      if (extraBags === null) return null;
+      transparentNylonWeight = requiredNumber(els.transparentNylonWeight, 'وزن النايلون الشفاف');
+      if (transparentNylonWeight === null) return null;
+    } else {
+      pallets = optionalNumber(els.palletsProduced, 'عدد المشاتيح', { integer: true });
+      if (pallets === null) return null;
+      extraBags = optionalNumber(els.extraBags, 'الأكياس الإضافية', { integer: true });
+      if (extraBags === null) return null;
+      transparentNylonWeight = optionalNumber(els.transparentNylonWeight, 'وزن النايلون الشفاف');
+      if (transparentNylonWeight === null) return null;
+    }
+
+    const printedNylonMode = ['weight', 'rolls'].includes(els.printedNylonMode.value) ? els.printedNylonMode.value : 'weight';
+    if (printedNylonMode === 'weight') {
+      printedNylonWeight = strict
+        ? requiredNumber(els.printedNylonWeight, 'وزن النايلون المطبوع')
+        : optionalNumber(els.printedNylonWeight, 'وزن النايلون المطبوع');
+      if (printedNylonWeight === null) return null;
+    } else {
+      printedNylonRolls = strict
+        ? requiredNumber(els.printedNylonRolls, 'عدد رولات النايلون المطبوع', { integer: true })
+        : optionalNumber(els.printedNylonRolls, 'عدد رولات النايلون المطبوع', { integer: true });
+      if (printedNylonRolls === null) return null;
+    }
+
+    wasteWeight = strict
+      ? requiredNumber(els.wasteWeight, 'وزن التوالف')
+      : optionalNumber(els.wasteWeight, 'وزن التوالف');
+    if (wasteWeight === null) return null;
+
+    if (strict && wasteWeight > 0 && (!els.wasteType.value.trim() || els.wasteType.value === 'لا يوجد')) {
+      return productionError('يرجى اختيار نوع التوالف', els.wasteType);
+    }
+
+    const wasteType = wasteWeight === 0 ? 'لا يوجد' : (els.wasteType.value.trim() || 'لا يوجد');
+    if (wasteWeight === 0) els.wasteType.value = 'لا يوجد';
+
+    const notes = els.prodNotes.value.trim();
+    if (strict && !notes) return productionError('يرجى تعبئة الملاحظات، أو كتابة «لا يوجد»', els.prodNotes);
+
+    return {
+      product, rolls, pallets, extraBags, transparentNylonWeight, printedNylonMode,
+      printedNylonWeight, printedNylonRolls, wasteWeight, wasteType, notes
+    };
+  }
+
+  function confirmEngineerSave() {
+    if (!els.engineerSaveDialog?.showModal) {
+      return Promise.resolve(confirm('تم التحقق من اكتمال البيانات المطلوبة. هل تريد حفظ سجل الإنتاج؟\nيمكنك تعديل سجلك لاحقًا إذا احتجت.'));
+    }
+    els.engineerSaveDialog.returnValue = '';
+    els.engineerSaveDialog.showModal();
+    return new Promise(resolve => {
+      els.engineerSaveDialog.addEventListener('close', () => resolve(els.engineerSaveDialog.returnValue === 'confirm'), { once: true });
+    });
+  }
+
   async function saveProduction(event) {
     event.preventDefault();
-    const product = getProduct(els.prodProduct.value);
-    if (!product) return toast('اختر الصنف أولًا.');
-    const rolls = getProductionRollRows();
-    if (!rolls.length) return toast('أضف رولة واحدة على الأقل.');
-    if (rolls.some(r => !r.code || r.weight <= 0)) return toast('أدخل كود ووزن صحيح لكل رولة.');
-    const normalizedCodes = rolls.map(r => r.code.toLowerCase());
-    if (new Set(normalizedCodes).size !== normalizedCodes.length) return toast('يوجد كود رولة مكرر داخل نفس التسجيل.');
+    const valid = validateProductionForm();
+    if (!valid) return;
+    const isUpdate = Boolean(currentProductionEditId);
+    if (currentRole === 'engineer' && !(await confirmEngineerSave())) return;
     const record = {
-      id: currentProductionEditId || uid(), date: els.prodDate.value, shift: els.prodShift.value, productId: product.id, productSnapshot: clone(product), rolls,
-      pallets: Number(els.palletsProduced.value || 0), extraBags: Number(els.extraBags.value || 0), transparentNylonWeight: Number(els.transparentNylonWeight.value || 0),
-      printedNylonMode: els.printedNylonMode.value, printedNylonWeight: els.printedNylonMode.value === 'weight' ? Number(els.printedNylonWeight.value || 0) : 0,
-      printedNylonRolls: els.printedNylonMode.value === 'rolls' ? Number(els.printedNylonRolls.value || 0) : 0, wasteWeight: Number(els.wasteWeight.value || 0),
-      wasteType: els.wasteType.value, notes: els.prodNotes.value.trim(), createdBy: currentUser.id, updatedAt: new Date().toISOString()
+      id: currentProductionEditId || uid(), isUpdate, date: els.prodDate.value, shift: els.prodShift.value, productId: valid.product.id, productSnapshot: clone(valid.product), rolls: valid.rolls,
+      pallets: valid.pallets, extraBags: valid.extraBags, transparentNylonWeight: valid.transparentNylonWeight,
+      printedNylonMode: valid.printedNylonMode, printedNylonWeight: valid.printedNylonWeight,
+      printedNylonRolls: valid.printedNylonRolls, wasteWeight: valid.wasteWeight,
+      wasteType: valid.wasteType, notes: valid.notes
     };
-    if (!record.date) return toast('اختر تاريخ الإنتاج.');
-    if ([record.pallets, record.extraBags, record.wasteWeight, record.transparentNylonWeight, record.printedNylonWeight, record.printedNylonRolls].some(n => n < 0)) return toast('تأكد من الأرقام المدخلة.');
     const existing = state.production.find(r => r.id === record.id);
-    if (existing?.createdBy) record.createdBy = existing.createdBy;
     try {
       els.saveProductionBtn.disabled = true;
       await dbUpsertProduction(record);
@@ -526,6 +687,8 @@
   function editProduction(id) {
     const r = state.production.find(x => x.id === id);
     if (!r) return;
+    const canEdit = ['owner', 'admin'].includes(currentRole) || (currentRole === 'engineer' && r.createdBy === currentUser?.id);
+    if (!canEdit) return toast('لا تملك صلاحية تعديل هذا السجل.');
     currentProductionEditId = id;
     navigate('production');
     els.prodDate.value = r.date;
@@ -554,6 +717,7 @@
   }
 
   async function deleteProduction(id) {
+    if (!['owner', 'admin'].includes(currentRole)) return toast('الحذف متاح للمدير أو مالك النظام فقط.');
     if (!confirm('حذف سجل الإنتاج نهائيًا؟')) return;
     try { await dbDelete('production_records', id); await loadRemoteState(); renderAll(); toast('تم حذف السجل.'); }
     catch (error) { console.error(error); toast(`تعذر الحذف: ${error.message || error}`); }
@@ -859,6 +1023,8 @@
 
   function renderRecords() {
     const query = ($('#recordSearch')?.value || '').trim().toLowerCase();
+    const profileNames = new Map(state.profiles.map(p => [p.id, p.full_name || p.username || '—']));
+    if (currentUser?.id) profileNames.set(currentUser.id, currentUser.profile?.full_name || currentUser.profile?.username || 'المستخدم الحالي');
     const rows = [...state.production].sort((a,b) => b.date.localeCompare(a.date)).filter(r => {
       const p = getProduct(r.productId) || r.productSnapshot || { name: '' };
       const hay = [r.date, p.name, r.shift, ...(r.rolls||[]).map(x=>x.code)].join(' ').toLowerCase();
@@ -869,7 +1035,13 @@
       const output = recordOutput(r);
       const rollText = (r.rolls||[]).map(x => `${x.code} (${num(x.weight,2)})`).join('، ');
       const printedNylonText = Number(r.printedNylonRolls || 0) > 0 ? `${num(r.printedNylonRolls)} رولة` : `${num(r.printedNylonWeight || 0,2)} كغم`;
-      return `<tr><td>${formatDate(r.date)}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(r.shift)}</td><td>${escapeHtml(rollText || '—')}</td><td>${num(recordRawWeight(r),2)} كغم</td><td>${num(r.pallets)}</td><td>${num(output.weightKg,2)} كغم</td><td>${num(r.transparentNylonWeight || 0,2)} كغم</td><td>${printedNylonText}</td><td>${num(r.wasteWeight,2)} كغم</td><td><div class="action-cell"><button class="icon-btn" data-edit-production="${r.id}">تعديل</button><button class="danger-btn" data-delete-production="${r.id}">حذف</button></div></td></tr>`;
+      const creator = profileNames.get(r.createdBy) || r.createdBy || '—';
+      const updater = profileNames.get(r.updatedBy) || r.updatedBy || '';
+      const updatedMeta = r.updatedBy ? `<span>آخر تعديل بواسطة: ${escapeHtml(updater)}</span><span>آخر تعديل: ${formatTimestamp(r.updatedAt)}</span>` : '';
+      const canEdit = ['owner', 'admin'].includes(currentRole) || (currentRole === 'engineer' && r.createdBy === currentUser?.id);
+      const canDelete = ['owner', 'admin'].includes(currentRole);
+      const actions = `<div class="action-cell">${canEdit ? `<button class="icon-btn" data-edit-production="${r.id}">تعديل</button>` : ''}${canDelete ? `<button class="danger-btn" data-delete-production="${r.id}">حذف</button>` : ''}</div>`;
+      return `<tr><td>${formatDate(r.date)}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(r.shift)}</td><td>${escapeHtml(rollText || '—')}</td><td>${num(recordRawWeight(r),2)} كغم</td><td>${num(r.pallets)}</td><td>${num(output.weightKg,2)} كغم</td><td>${num(r.transparentNylonWeight || 0,2)} كغم</td><td>${printedNylonText}</td><td>${num(r.wasteWeight,2)} كغم</td><td><div class="record-meta"><span>أُضيف بواسطة: ${escapeHtml(creator)}</span><span>تاريخ الإضافة: ${formatTimestamp(r.createdAt)}</span>${updatedMeta}</div>${actions}</td></tr>`;
     }).join('') : `<tr><td colspan="11"><div class="empty-state">لا توجد سجلات.</div></td></tr>`;
     $$('[data-edit-production]').forEach(btn => btn.addEventListener('click', () => editProduction(btn.dataset.editProduction)));
     $$('[data-delete-production]').forEach(btn => btn.addEventListener('click', () => deleteProduction(btn.dataset.deleteProduction)));
@@ -880,7 +1052,7 @@
     if (!els.usersTable) return;
     const names = new Map(state.profiles.map(p => [p.id, p.full_name || p.username]));
     const roleName = role => ({ owner: 'مالك', admin: 'مدير', engineer: 'مهندس' }[role] || role);
-    els.usersTable.innerHTML = state.profiles.length ? state.profiles.map(p => `<tr><td>${escapeHtml(p.full_name || '—')}</td><td>${escapeHtml(p.username || 'غير معيّن')}</td><td><span class="status-chip">${roleName(p.role)}</span></td><td>${p.is_active ? 'نشط' : 'موقوف'}</td><td>${formatTimestamp(p.last_login_at)}</td><td>${formatTimestamp(p.last_activity_at)}</td><td>${escapeHtml(names.get(p.created_by) || '—')}</td><td><div class="action-cell"><button class="icon-btn" data-edit-user="${p.id}">تعديل</button><button class="icon-btn" data-reset-password="${p.id}">كلمة المرور</button></div></td></tr>`).join('') : `<tr><td colspan="8"><div class="empty-state">لا توجد حسابات ظاهرة.</div></td></tr>`;
+    els.usersTable.innerHTML = state.profiles.length ? state.profiles.map(p => `<tr><td>${escapeHtml(p.full_name || '—')}</td><td>${escapeHtml(p.username || 'غير معيّن')}</td><td><span class="status-chip">${roleName(p.role)}</span></td><td>${p.is_active ? 'نشط' : 'موقوف'}</td><td>${formatTimestamp(p.created_at)}</td><td>${escapeHtml(names.get(p.created_by) || (p.created_by ? '—' : 'حساب رئيسي'))}</td><td>${p.last_login_at ? formatTimestamp(p.last_login_at) : 'لم يسجل الدخول بعد'}</td><td>${p.last_activity_at ? formatTimestamp(p.last_activity_at) : 'لا يوجد نشاط بعد'}</td><td><div class="action-cell"><button class="icon-btn" data-edit-user="${p.id}">تعديل</button><button class="icon-btn" data-reset-password="${p.id}">كلمة المرور</button></div></td></tr>`).join('') : `<tr><td colspan="9"><div class="empty-state">لا توجد حسابات ظاهرة.</div></td></tr>`;
     $$('[data-edit-user]').forEach(btn => btn.addEventListener('click', () => editUser(btn.dataset.editUser)));
     $$('[data-reset-password]').forEach(btn => btn.addEventListener('click', () => resetUserPassword(btn.dataset.resetPassword)));
     const auditUser = $('#auditUser');
@@ -892,7 +1064,7 @@
   }
 
   function formatTimestamp(value) {
-    return value ? new Intl.DateTimeFormat('ar-PS', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value)) : '—';
+    return value ? new Intl.DateTimeFormat('ar-PS', { timeZone: 'Asia/Hebron', day: '2-digit', month: '2-digit', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(value)) : '—';
   }
 
   async function editUser(id) {

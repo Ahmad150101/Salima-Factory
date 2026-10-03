@@ -59,7 +59,7 @@ Deno.serve(async (req) => {
       .from('profiles')
       .update({ username, role, full_name: fullName, is_active: true, created_by: userResult.user.id })
       .eq('id', createdUser.id)
-      .select('id,username,full_name,role,is_active,created_by')
+      .select('id,username,full_name,role,is_active,created_at,created_by,last_login_at,last_activity_at')
       .single()
 
     if (profileError) {
@@ -67,10 +67,14 @@ Deno.serve(async (req) => {
       throw profileError
     }
 
-    await service.from('audit_logs').insert({
+    const { error: auditError } = await service.from('audit_logs').insert({
       user_id: userResult.user.id, action: 'INSERT', entity_type: 'profiles', entity_id: createdUser.id,
       new_data: profile,
     })
+    if (auditError) {
+      await service.auth.admin.deleteUser(createdUser.id)
+      throw auditError
+    }
 
     return new Response(JSON.stringify({ user: { id: createdUser.id, username, role } }), {
       status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
