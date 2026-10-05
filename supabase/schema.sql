@@ -22,16 +22,9 @@ create unique index if not exists profiles_username_lower_uidx
 
 create table if not exists public.user_permissions (
   user_id uuid not null references public.profiles(id) on delete cascade,
-  permission_key text not null check (permission_key in (
-    'dashboard.view',
-    'production.view','production.create','production.update','production.delete',
-    'shipments.view','shipments.create','shipments.update','shipments.delete',
-    'products.view','products.create','products.update','products.delete',
-    'reports.view','reports.export','reports.print',
-    'records.view','records.update','records.delete','records.export',
-    'users.view','users.create','users.update',
-    'activity.view','system.view'
-  )),
+  permission_key text not null
+    constraint user_permissions_key_check
+    check (permission_key ~ '^[a-z_]+\.[a-z_]+$'),
   allowed boolean not null,
   updated_by uuid references public.profiles(id),
   updated_at timestamptz not null default now(),
@@ -189,7 +182,7 @@ as $$
   end;
 $$;
 
-create or replace function private.has_permission(requested_permission text)
+create or replace function private.has_permission(p_key text)
 returns boolean
 language sql
 stable
@@ -202,8 +195,8 @@ as $$
       (select up.allowed
        from public.user_permissions up
        where up.user_id = p.id
-         and up.permission_key = requested_permission),
-      private.role_has_permission(p.role, requested_permission)
+         and up.permission_key = p_key),
+      private.role_has_permission(p.role, p_key)
     )
   end
   from public.profiles p
