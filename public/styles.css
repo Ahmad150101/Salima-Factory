@@ -292,10 +292,17 @@ input:focus, select:focus, textarea:focus { border-color: #72b69d; box-shadow: 0
 .button-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .engineer-weekly-report { margin-top: 0; }
 .engineer-report-stats { margin-top: 16px; }
+.engineer-report-stats .stat-card > span,
+.engineer-report-stats .stat-card > strong,
+.engineer-report-stats .stat-card > small { display: block; }
+.engineer-report-stats .stat-card > small { margin: 4px 0 0; }
 .report-scope-note,
 .records-scope-note { margin: 5px 0 0; color: var(--muted); font-size: .84rem; }
-.records-panel-head { align-items: end; }
-.records-toolbar { display: flex; align-items: end; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.records-panel-head { flex-direction: column; align-items: stretch; gap: 12px; }
+.records-scope { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.records-scope-note { margin: 0; }
+.records-toolbar { width: 100%; display: grid; grid-template-columns: minmax(260px, 1fr) max-content; align-items: end; gap: 10px; }
+.records-toolbar > .search-input { width: 100%; min-width: 0; }
 .record-date-controls { display: flex; align-items: end; gap: 8px; }
 .record-date-controls label { min-width: 165px; }
 .record-date-controls button { min-height: 43px; white-space: nowrap; }
@@ -865,10 +872,13 @@ html[data-theme="night"] .permission-check { background: var(--green-50); border
   .report-filter { display: grid; grid-template-columns: 1fr 1fr; align-items: end; width: 100%; }
   .report-filter label { min-width: 0; }
   .report-filter > button { min-height: 44px; }
-  .records-panel-head { align-items: stretch; }
-  .records-toolbar { width: 100%; display: grid; grid-template-columns: 1fr; }
-  .record-date-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
-  .record-date-controls label { min-width: 0; }
+  .records-panel-head { gap: 10px; }
+  .records-scope { display: grid; gap: 3px; }
+  .records-toolbar { grid-template-columns: 1fr; gap: 10px; }
+  .record-date-controls { width: 100%; display: grid; grid-template-columns: 1fr; align-items: stretch; gap: 10px; }
+  .record-date-controls label,
+  .record-date-controls input,
+  .record-date-controls button { width: 100%; min-width: 0; }
   .record-date-controls button { min-height: 46px; }
   .report-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .report-stats .stat-card { min-height: 118px; }
@@ -926,8 +936,6 @@ html[data-theme="night"] .permission-check { background: var(--green-50); border
   .logout-btn { padding: 7px; }
   .report-filter { grid-template-columns: 1fr; }
   .report-filter > button { width: 100%; }
-  .record-date-controls { grid-template-columns: 1fr; }
-  .record-date-controls button { width: 100%; }
   .product-card-head { flex-direction: column; align-items: stretch; }
   .product-card-head .action-cell { width: 100%; }
   .product-card-head .action-cell > button { flex: 1; }

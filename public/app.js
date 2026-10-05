@@ -242,6 +242,7 @@
     $$('[data-report-scope="engineer"]').forEach(el => el.classList.toggle('hidden', !isEngineer));
     $$('[data-report-scope="management"]').forEach(el => el.classList.toggle('hidden', isEngineer));
     $('#recordDateControls')?.classList.toggle('hidden', isEngineer);
+    if ($('#reportsNavLabel')) $('#reportsNavLabel').textContent = isEngineer ? 'التقرير الأسبوعي' : 'التقارير';
     if ($('#reportsEyebrow')) $('#reportsEyebrow').textContent = isEngineer ? 'تقرير المهندس' : 'تقارير الإدارة';
     if ($('#reportsTitle')) $('#reportsTitle').textContent = isEngineer ? 'ملخص الأسبوع الحالي' : 'التقرير الأسبوعي والمقارنة الشهرية';
   }
@@ -1176,7 +1177,8 @@
     $('#engineerReportPallets').textContent = num(sum(records, r => r.pallets));
     $('#engineerReportPrintedNylonWeight').textContent = num(sum(records, r => r.printedNylonWeight), 2);
     $('#engineerReportPrintedNylonRolls').textContent = num(sum(records, r => r.printedNylonRolls));
-    $('#engineerReportPeriodLabel').textContent = `الأسبوع الحالي — من السبت ${formatDate(from)} إلى الجمعة ${formatDate(to)}`;
+    $('#engineerReportPeriodLabel').textContent = `من السبت ${formatDate(from)} إلى الجمعة ${formatDate(to)}`;
+    $('#engineerReportEmpty')?.classList.toggle('hidden', records.length > 0);
   }
 
   function renderManagementWeeklyReport() {
@@ -1535,6 +1537,7 @@
     els.reconcileMonth.addEventListener('change', renderReconciliation);
     $('#exportWeeklyCsv').addEventListener('click', exportWeeklyCsv);
     $('#printWeeklyReport').addEventListener('click', () => can('reports', 'print') ? window.print() : toast('لا تملك صلاحية طباعة التقارير.'));
+    $('#refreshEngineerWeeklyReport')?.addEventListener('click', renderEngineerWeeklyReport);
     $('#exportEngineerWeeklyCsv')?.addEventListener('click', exportWeeklyCsv);
     $('#printEngineerWeeklyReport')?.addEventListener('click', () => can('reports', 'print') ? window.print() : toast('لا تملك صلاحية طباعة التقارير.'));
 

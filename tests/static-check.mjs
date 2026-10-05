@@ -46,6 +46,10 @@ assert.match(html, /id="recordDateFilter"[^>]*type="date"|type="date"[^>]*id="re
 assert.match(html, /id="clearRecordDateFilter"/, 'records date clear button is missing');
 assert.match(html, /id="recordsScopeNote"/, 'records scope note is missing');
 assert.match(html, /id="engineerReportPeriodLabel"/, 'engineer weekly period label is missing');
+assert.match(html, /id="reportsNavLabel"/, 'role-specific reports navigation label is missing');
+assert.match(html, /id="refreshEngineerWeeklyReport"[^>]*>\s*عرض تقرير هذا الأسبوع\s*</, 'engineer weekly report button is missing');
+assert.match(html, /id="engineerReportEmpty"[^>]*>\s*لا يوجد إنتاج مسجل لهذا الأسبوع\s*</, 'engineer empty-week message is missing');
+assert.match(html, /class="records-scope"/, 'records scope wrapper is missing');
 for (const metric of ['pallets', 'production-weight', 'printed-weight', 'printed-rolls']) {
   assert.match(html, new RegExp(`data-report-metric="${metric}"`), `engineer report metric is missing: ${metric}`);
 }
@@ -68,6 +72,12 @@ assert.doesNotMatch(app, /\bpage_key\b|\baction_key\b/);
 assert.match(app, /async\s+function\s+fetchAllRows\s*\(/, 'batched Supabase reader is missing');
 assert.match(app, /\.range\s*\(/, 'Supabase range pagination is missing');
 assert.match(app, /currentRole\s*===\s*['"]engineer['"]\s*\?\s*can\(['"]shipments['"]\)\s*:\s*can\(['"]shipments['"]\)\s*\|\|\s*can\(['"]reports['"]\)/, 'engineer reports.view must not implicitly load shipments');
+assert.match(app, /reportsNavLabel['"]\)\)\s*\$\(['"]#reportsNavLabel['"]\)\.textContent\s*=\s*isEngineer\s*\?\s*['"]التقرير الأسبوعي['"]\s*:\s*['"]التقارير['"]/, 'reports navigation label must change only for engineer');
+assert.match(app, /refreshEngineerWeeklyReport['"]\)\?\.addEventListener\(['"]click['"],\s*renderEngineerWeeklyReport\)/, 'engineer weekly report button is not wired');
+assert.match(app, /engineerReportEmpty['"]\)\?\.classList\.toggle\(['"]hidden['"],\s*records\.length\s*>\s*0\)/, 'engineer empty-week message is not updated');
+assert.match(css, /\.records-panel-head\s*\{[^}]*flex-direction:\s*column[^}]*align-items:\s*stretch/s, 'desktop records header must be compact and stacked');
+assert.match(css, /\.records-toolbar\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*minmax\(260px,\s*1fr\)\s+max-content/s, 'desktop records filters must share one balanced row');
+assert.match(css, /@media\s*\(max-width:\s*620px\)[\s\S]*?\.record-date-controls\s*\{[^}]*grid-template-columns:\s*1fr/s, 'mobile records controls must stack at full width');
 
 const weekFunctions = new Function(`${extractJavaScriptFunction(app, 'startOfWeek')}\n${extractJavaScriptFunction(app, 'endOfWeek')}\nreturn { startOfWeek, endOfWeek };`)();
 const weekCases = [

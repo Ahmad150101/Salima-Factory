@@ -40,7 +40,7 @@
         <button class="nav-item" data-view="production"><span class="nav-icon">⚙</span><span>الإنتاج اليومي</span></button>
         <button class="nav-item" data-view="shipments"><span class="nav-icon">▣</span><span>الشحنات الواردة</span></button>
         <button class="nav-item" data-view="products"><span class="nav-icon">◫</span><span>الأصناف</span></button>
-        <button class="nav-item" data-view="reports"><span class="nav-icon">▤</span><span>التقارير</span></button>
+        <button class="nav-item" data-view="reports"><span class="nav-icon">▤</span><span id="reportsNavLabel">التقارير</span></button>
         <button class="nav-item" data-view="records"><span class="nav-icon">⌕</span><span>سجل الإنتاج</span></button>
         <button class="nav-item" data-view="users"><span class="nav-icon">♙</span><span>إدارة المستخدمين</span></button>
         <button class="nav-item" data-view="activity"><span class="nav-icon">◎</span><span>سجل النشاط</span></button>
@@ -282,7 +282,7 @@
         <article class="panel engineer-weekly-report hidden" id="engineerWeeklyReport" data-report-scope="engineer">
           <div class="panel-head">
             <div><span class="eyebrow">من السبت إلى الجمعة</span><h3>ملخص إنتاجك للأسبوع الحالي</h3><p class="report-scope-note" id="engineerReportPeriodLabel"></p></div>
-            <div class="button-row"><button class="secondary-btn" id="exportEngineerWeeklyCsv" data-action-control="reports:export" type="button">تصدير CSV</button><button class="secondary-btn" id="printEngineerWeeklyReport" data-action-control="reports:print" type="button">طباعة / PDF</button></div>
+            <div class="button-row"><button class="primary-btn" id="refreshEngineerWeeklyReport" type="button">عرض تقرير هذا الأسبوع</button><button class="secondary-btn" id="exportEngineerWeeklyCsv" data-action-control="reports:export" type="button">تصدير CSV</button><button class="secondary-btn" id="printEngineerWeeklyReport" data-action-control="reports:print" type="button">طباعة / PDF</button></div>
           </div>
           <div class="stats-grid report-stats engineer-report-stats">
             <article class="stat-card" data-report-metric="pallets"><span>عدد المشاتيح المنتجة</span><strong id="engineerReportPallets">0</strong><small>مشتاح</small></article>
@@ -290,6 +290,7 @@
             <article class="stat-card" data-report-metric="printed-weight"><span>النايلون المطبوع</span><strong id="engineerReportPrintedNylonWeight">0</strong><small>كغم</small></article>
             <article class="stat-card" data-report-metric="printed-rolls"><span>رولات النايلون المطبوع</span><strong id="engineerReportPrintedNylonRolls">0</strong><small>رولة</small></article>
           </div>
+          <p class="empty-state hidden" id="engineerReportEmpty" role="status">لا يوجد إنتاج مسجل لهذا الأسبوع</p>
           <p class="info-note">يعرض هذا الملخص بياناتك المتاحة للأسبوع الحالي فقط وفق صلاحيات قاعدة البيانات.</p>
         </article>
 
@@ -317,7 +318,7 @@
         </div>
         <article class="panel table-panel">
           <div class="panel-head records-panel-head">
-            <div><span class="eyebrow">نطاق السجلات</span><p class="records-scope-note" id="recordsScopeNote"></p></div>
+            <div class="records-scope"><span class="eyebrow">نطاق السجلات</span><p class="records-scope-note" id="recordsScopeNote"></p></div>
             <div class="records-toolbar">
               <input class="search-input wide" id="recordSearch" placeholder="ابحث بالصنف أو كود الرولة..." />
               <div class="record-date-controls" id="recordDateControls">

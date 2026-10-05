@@ -16,6 +16,7 @@ const supabaseStub = String.raw`
   const sessionRole = params.get('role') || 'owner';
   const recordCount = Math.max(4, Number(params.get('size') || 1005));
   const recordsOnly = params.get('recordsOnly') === '1';
+  const emptyWeek = params.get('emptyWeek') === '1';
   const ownerId = '11111111-1111-4111-8111-111111111111';
   const engineerId = '22222222-2222-4222-8222-222222222222';
   const adminId = '33333333-3333-4333-8333-333333333333';
@@ -47,12 +48,15 @@ const supabaseStub = String.raw`
   }
 
   const productionRecords = sessionRole === 'engineer'
-    ? [
+    ? (emptyWeek ? [
+        productionRow('eng-old', shiftIso(weekStart, -1), engineerId, 'ENG-OLD'),
+        productionRow('other-current', today, ownerId, 'OTHER-CURRENT')
+      ] : [
         productionRow('eng-current-1', weekStart, engineerId, 'ENG-CURRENT-1'),
         productionRow('eng-current-2', today, engineerId, 'ENG-CURRENT-2'),
         productionRow('eng-old', shiftIso(weekStart, -1), engineerId, 'ENG-OLD'),
         productionRow('other-current', today, ownerId, 'OTHER-CURRENT')
-      ]
+      ])
     : Array.from({ length: recordCount }, (_, index) => {
         const date = index === 0 ? '2024-01-15' : index === 1 ? '2024-01-16' : shiftIso('2024-02-01', index % 700);
         return productionRow('production-' + String(index).padStart(5, '0'), date, index % 2 ? engineerId : ownerId, 'ROLL-' + index, 1 + (index % 4));
@@ -189,11 +193,12 @@ const supabaseStub = String.raw`
   window.supabase = { createClient: () => client };
 })();`;
 
-async function openScenario(browser, { role, size = 1005, recordsOnly = false, viewport = { width: 1440, height: 900 } }) {
+async function openScenario(browser, { role, size = 1005, recordsOnly = false, emptyWeek = false, viewport = { width: 1440, height: 900 } }) {
   const page = await browser.newPage({ viewport, locale: 'ar' });
   await page.route('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4', route => route.fulfill({ status: 200, contentType: 'application/javascript', body: supabaseStub }));
   const query = new URLSearchParams({ role, size: String(size) });
   if (recordsOnly) query.set('recordsOnly', '1');
+  if (emptyWeek) query.set('emptyWeek', '1');
   await page.goto(`${appUrl}/?${query}`, { waitUntil: 'networkidle' });
   await page.locator('#appShell:not(.hidden)').waitFor({ state: 'visible' });
   return page;
@@ -213,6 +218,37 @@ async function assertDateFilter(page, expectedTotal) {
   assert.match(await page.locator('#recordsScopeNote').innerText(), /دون قيد أسبوعي/);
 }
 
+async function assertDesktopRecordsLayout(page) {
+  const boxes = await Promise.all([
+    page.locator('.records-scope').boundingBox(),
+    page.locator('.records-toolbar').boundingBox(),
+    page.locator('#recordSearch').boundingBox(),
+    page.locator('#recordDateFilter').boundingBox(),
+    page.locator('#clearRecordDateFilter').boundingBox()
+  ]);
+  boxes.forEach(box => assert(box, 'desktop records layout element is missing'));
+  const [scope, toolbar, search, date, clear] = boxes;
+  assert(scope.y + scope.height <= toolbar.y + 1, 'records scope should sit directly above the desktop filters');
+  const bottoms = [search, date, clear].map(box => box.y + box.height);
+  assert(Math.max(...bottoms) - Math.min(...bottoms) <= 3, 'desktop search, date, and clear button must align in one row');
+  assert(search.width > date.width, 'desktop search should use the flexible space without a large middle gap');
+}
+
+async function assertMobileRecordsLayout(page) {
+  const boxes = await Promise.all([
+    page.locator('.records-toolbar').boundingBox(),
+    page.locator('#recordSearch').boundingBox(),
+    page.locator('#recordDateFilter').boundingBox(),
+    page.locator('#clearRecordDateFilter').boundingBox()
+  ]);
+  boxes.forEach(box => assert(box, 'mobile records layout element is missing'));
+  const [toolbar, search, date, clear] = boxes;
+  for (const box of [search, date, clear]) assert(Math.abs(box.width - toolbar.width) <= 2, 'mobile records controls must use the full width');
+  assert(search.y + search.height <= date.y, 'mobile date must appear below search');
+  assert(date.y + date.height <= clear.y, 'mobile clear button must appear below date');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'mobile records page overflows horizontally');
+}
+
 (async () => {
   const browser = await chromium.launch({ executablePath: chromePath, headless: true });
 
@@ -222,7 +258,10 @@ async function assertDateFilter(page, expectedTotal) {
   const ownerRanges = await owner.evaluate(() => Object.fromEntries(['production_records', 'shipments'].map(table => [table, window.__queryLog.filter(entry => entry.table === table && entry.operation === 'select').map(entry => entry.range)])));
   assert.deepEqual(ownerRanges.production_records, [[0, 499], [500, 999], [1000, 1499]], 'production pagination must pass 1000 rows');
   assert.deepEqual(ownerRanges.shipments, [[0, 499], [500, 999], [1000, 1499]], 'shipment pagination must pass 1000 rows');
+  assert.equal((await owner.locator('#reportsNavLabel').innerText()).trim(), 'التقارير', 'owner reports label must stay unchanged');
   await assertDateFilter(owner, 1005);
+  await assertDesktopRecordsLayout(owner);
+  if (screenshotDir) await owner.screenshot({ path: join(screenshotDir, 'salima-owner-desktop-records-polished.png') });
   await owner.locator('[data-view="reports"]').click();
   await owner.locator('#reportFrom').fill('2024-01-01');
   await owner.locator('#reportTo').fill('2026-12-31');
@@ -239,12 +278,22 @@ async function assertDateFilter(page, expectedTotal) {
   await owner.close();
 
   const admin = await openScenario(browser, { role: 'admin', size: 20 });
+  assert.equal((await admin.locator('#reportsNavLabel').innerText()).trim(), 'التقارير', 'admin reports label must stay unchanged');
   await assertDateFilter(admin, 20);
   assert.equal(await admin.locator('[data-edit-production]').count(), 20, 'admin must be able to edit historical records');
+  await admin.setViewportSize({ width: 390, height: 844 });
+  await admin.reload({ waitUntil: 'networkidle' });
+  await admin.locator('#appShell:not(.hidden)').waitFor({ state: 'visible' });
+  await admin.locator('#mobileMenu').click();
+  await admin.locator('[data-view="records"]').click();
+  await admin.waitForTimeout(300);
+  await assertMobileRecordsLayout(admin);
+  if (screenshotDir) await admin.screenshot({ path: join(screenshotDir, 'salima-admin-mobile-records-polished.png'), fullPage: true });
   await admin.close();
 
   const engineer = await openScenario(browser, { role: 'engineer', size: 20 });
   assert.equal(await engineer.locator('[data-view="reports"]').isVisible(), true, 'engineer must see reports navigation');
+  assert.equal((await engineer.locator('#reportsNavLabel').innerText()).trim(), 'التقرير الأسبوعي', 'engineer navigation must say weekly report');
   assert.equal(await engineer.locator('[data-view="shipments"]').isVisible(), false, 'engineer must not see shipments by default');
   assert.equal(await engineer.evaluate(() => window.__queryLog.some(entry => entry.table === 'shipments')), false, 'reports.view alone must not query shipments');
   const engineerProductionQuery = await engineer.evaluate(() => window.__queryLog.find(entry => entry.table === 'production_records'));
@@ -253,6 +302,12 @@ async function assertDateFilter(page, expectedTotal) {
   assert(engineerProductionQuery.filters.some(filter => filter.operator === 'lte' && filter.key === 'production_date'), 'engineer query must stop today');
   await engineer.locator('[data-view="reports"]').click();
   assert.equal(await engineer.locator('#engineerWeeklyReport').isVisible(), true);
+  assert.equal(await engineer.locator('#refreshEngineerWeeklyReport').isVisible(), true, 'engineer weekly refresh button must be visible');
+  assert.match(await engineer.locator('#engineerReportPeriodLabel').innerText(), /^من السبت .+ إلى الجمعة .+$/);
+  await engineer.locator('#engineerReportPallets').evaluate(element => { element.textContent = 'قديم'; });
+  await engineer.locator('#refreshEngineerWeeklyReport').click();
+  assert.notEqual((await engineer.locator('#engineerReportPallets').innerText()).trim(), 'قديم', 'weekly report button must refresh the summary');
+  assert.equal(await engineer.locator('#engineerReportEmpty').isVisible(), false, 'non-empty engineer week must not show the empty message');
   assert.equal(await engineer.locator('#engineerWeeklyReport .stat-card').count(), 4, 'engineer report must contain exactly four metrics');
   assert.equal(await engineer.locator('#printableWeeklyReport').isVisible(), false, 'management report must be hidden from engineer');
   assert.equal(await engineer.locator('.monthly-reconciliation').isVisible(), false, 'reconciliation must be hidden from engineer');
@@ -260,6 +315,8 @@ async function assertDateFilter(page, expectedTotal) {
   assert.equal(await engineer.locator('#printEngineerWeeklyReport').isVisible(), false, 'engineer print must default off');
   const engineerReportText = await engineer.locator('#engineerWeeklyReport').innerText();
   for (const forbidden of ['وزن الرولات', 'التوالف', 'نايلون شفاف', 'الشحنات', 'الموردين', 'الرصيد', 'الوارد']) assert.equal(engineerReportText.includes(forbidden), false, `engineer report leaked: ${forbidden}`);
+  await engineer.waitForTimeout(400);
+  if (screenshotDir) await engineer.screenshot({ path: join(screenshotDir, 'salima-engineer-desktop-weekly-report.png') });
   await engineer.locator('[data-view="records"]').click();
   assert.match(await engineer.locator('#recordsScopeNote').innerText(), /الأسبوع الحالي.*السبت/);
   assert.equal(await engineer.locator('[data-edit-production]').count(), 2, 'engineer must see only own current-week records');
@@ -283,6 +340,14 @@ async function assertDateFilter(page, expectedTotal) {
   if (screenshotDir) await engineer.screenshot({ path: join(screenshotDir, 'salima-engineer-mobile-report.png'), fullPage: true });
   await engineer.close();
 
+  const emptyEngineer = await openScenario(browser, { role: 'engineer', size: 20, emptyWeek: true });
+  await emptyEngineer.locator('[data-view="reports"]').click();
+  await emptyEngineer.locator('#refreshEngineerWeeklyReport').click();
+  assert.equal(await emptyEngineer.locator('#engineerReportEmpty').isVisible(), true, 'empty engineer week must show a clear message');
+  assert.equal((await emptyEngineer.locator('#engineerReportEmpty').innerText()).trim(), 'لا يوجد إنتاج مسجل لهذا الأسبوع');
+  assert.equal(await emptyEngineer.locator('#printableWeeklyReport').isVisible(), false, 'empty engineer report must not reveal management data');
+  await emptyEngineer.close();
+
   const recordsOnlyEngineer = await openScenario(browser, { role: 'engineer', size: 20, recordsOnly: true });
   assert.equal(await recordsOnlyEngineer.locator('[data-view="production"]').isVisible(), false, 'production navigation should respect production.view override');
   await recordsOnlyEngineer.locator('[data-view="records"]').click();
@@ -295,7 +360,7 @@ async function assertDateFilter(page, expectedTotal) {
   await recordsOnlyEngineer.close();
 
   await browser.close();
-  console.log('Desktop/mobile role, weekly scope, date filter, and >1000 pagination checks passed.');
+  console.log('Desktop/mobile records layout, engineer weekly report, role scope, and >1000 pagination checks passed.');
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;
