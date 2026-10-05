@@ -10,13 +10,28 @@
     { id: 'hana', name: 'محارم الهنا 1 كغم', bagsPerPallet: 30, packsPerBag: 10, unitsPerPack: 5, unitWeightKg: 0.2 }
   ];
 
+  const PAGE_ACTIONS = {
+    dashboard: ['view'],
+    production: ['view', 'create', 'update', 'delete'],
+    shipments: ['view', 'create', 'update', 'delete'],
+    products: ['view', 'create', 'update', 'delete'],
+    reports: ['view', 'export', 'print'],
+    records: ['view', 'update', 'delete', 'export'],
+    users: ['view', 'create', 'update'],
+    activity: ['view'],
+    system: ['view']
+  };
+  const PAGE_NAMES = { dashboard: 'لوحة التحكم', production: 'الإنتاج اليومي', shipments: 'الشحنات', products: 'الأصناف', reports: 'التقارير', records: 'سجل الإنتاج', users: 'المستخدمون', activity: 'سجل النشاط', system: 'إدارة النظام' };
+  const ACTION_NAMES = { view: 'عرض', create: 'إضافة', update: 'تعديل', delete: 'حذف', export: 'تصدير', print: 'طباعة' };
+
   const seed = {
     products: DEFAULT_PRODUCTS,
     shipments: [],
     production: [],
     profiles: [],
     presence: [],
-    auditLogs: []
+    auditLogs: [],
+    permissions: []
   };
 
   let state = cloneSeed();
@@ -27,6 +42,7 @@
   let toastTimer = null;
   let presenceTimer = null;
   let lastProfileCheckAt = 0;
+  let permissionUserId = null;
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -101,6 +117,11 @@
     newUserPassword: $('#newUserPassword'),
     newUserPasswordConfirm: $('#newUserPasswordConfirm'),
     usersTable: $('#usersTable'),
+    permissionsDialog: $('#permissionsDialog'),
+    permissionsTitle: $('#permissionsTitle'),
+    permissionsHint: $('#permissionsHint'),
+    permissionsHead: $('#permissionsHead'),
+    permissionsBody: $('#permissionsBody'),
     toast: $('#toast')
   };
 
@@ -113,7 +134,8 @@
     records: ['الأرشيف', 'السجلات'],
     users: ['الإدارة', 'إدارة المستخدمين'],
     activity: ['الرقابة', 'سجل النشاط'],
-    system: ['الإدارة', 'إدارة النظام']
+    system: ['الإدارة', 'إدارة النظام'],
+    'no-access': ['الحساب', 'لا توجد صلاحيات متاحة']
   };
 
   function clone(value) { return JSON.parse(JSON.stringify(value)); }
@@ -154,33 +176,86 @@
     return { id: row.id, date: row.production_date, shift: row.shift, productId: row.product_id, productSnapshot: row.product_snapshot || null, rolls: Array.isArray(row.rolls) ? row.rolls : [], pallets: Number(row.pallets || 0), extraBags: Number(row.extra_bags || 0), transparentNylonWeight: Number(row.transparent_nylon_weight || 0), printedNylonMode: row.printed_nylon_mode || 'weight', printedNylonWeight: Number(row.printed_nylon_weight || 0), printedNylonRolls: Number(row.printed_nylon_rolls || 0), wasteWeight: Number(row.waste_weight || 0), wasteType: row.waste_type || 'لا يوجد', notes: row.notes || '', createdBy: row.created_by, updatedBy: row.updated_by, createdAt: row.created_at, updatedAt: row.updated_at };
   }
 
+  function roleDefault(role, page, action) {
+    if (role === 'owner') return true;
+    const defaults = {
+      admin: { dashboard: ['view'], production: ['view','create','update','delete'], shipments: ['view','create','update','delete'], products: ['view','create','update','delete'], reports: ['view','export','print'], records: ['view','update','delete','export'] },
+      engineer: { dashboard: ['view'], production: ['view','create','update'], records: ['view','update'] }
+    };
+    return Boolean(defaults[role]?.[page]?.includes(action));
+  }
+
+  function can(page, action = 'view', userId = currentUser?.id, role = currentRole) {
+    if (role === 'owner') return true;
+    if (page === 'users' && ['create', 'update'].includes(action)) return false;
+    const override = state.permissions.find(p => p.user_id === userId && p.permission_key === `${page}.${action}`);
+    return override ? override.allowed === true : roleDefault(role, page, action);
+  }
+
+  function applyAccessUI() {
+    if (!currentRole) return;
+    $$('.nav-item[data-view]').forEach(el => el.classList.toggle('hidden', !can(el.dataset.view)));
+    Object.keys(PAGE_ACTIONS).forEach(page => {
+      const view = $(`#view-${page}`);
+      if (view) view.classList.toggle('permission-hidden', !can(page));
+    });
+    $$('[data-action-control]').forEach(el => {
+      const [page, action] = el.dataset.actionControl.split(':');
+      el.classList.toggle('hidden', !can(page, action));
+    });
+    $$('[data-action-any]').forEach(el => {
+      const allowed = el.dataset.actionAny.split(',').some(value => {
+        const [page, action] = value.split(':');
+        return can(page, action);
+      });
+      el.classList.toggle('hidden', !allowed);
+    });
+    const addProduction = can('production', 'create');
+    if (els.productionForm) els.productionForm.classList.toggle('hidden', !addProduction && !currentProductionEditId);
+    const activePage = $('.view.active')?.id?.replace('view-', '');
+    if (activePage && !can(activePage)) navigate(firstAllowedPage());
+  }
+
+  function firstAllowedPage() {
+    return Object.keys(PAGE_ACTIONS).find(page => can(page)) || 'no-access';
+  }
+
   async function loadRemoteState() {
     if (!db || !currentUser) return;
-    const queries = [
-      db.from('products').select('*').eq('is_active', true).order('name'),
-      db.from('production_records').select('*').order('production_date', { ascending: false })
-    ];
-    if (['owner', 'admin'].includes(currentRole)) {
+    const permissionResult = await db.from('user_permissions').select('user_id,permission_key,allowed');
+    if (permissionResult.error) throw permissionResult.error;
+    state.permissions = permissionResult.data || [];
+    const queries = [];
+    const slots = {};
+    if (can('production') || can('records') || can('reports') || can('dashboard')) {
+      slots.products = queries.length; queries.push(db.from('products').select('*').eq('is_active', true).order('name'));
+      slots.production = queries.length; queries.push(db.from('production_records').select('*').order('production_date', { ascending: false }));
+    }
+    if (can('shipments') || can('reports')) {
+      slots.shipments = queries.length;
       queries.push(db.from('shipments').select('*').order('shipment_date', { ascending: false }));
     }
-    if (['owner', 'admin'].includes(currentRole)) {
-      const columns = currentRole === 'owner' ? 'id,username,full_name,role,is_active,last_login_at,last_activity_at,created_at,created_by' : 'id,username,full_name';
+    if (can('users') || can('activity') || (['owner', 'admin'].includes(currentRole) && can('records'))) {
+      slots.profiles = queries.length;
+      const columns = can('users') || can('activity') ? 'id,username,full_name,role,is_active,last_login_at,last_activity_at,created_at,created_by' : 'id,username,full_name';
       queries.push(db.from('profiles').select(columns).order('full_name'));
     }
-    if (currentRole === 'owner') {
+    if (can('activity')) {
+      slots.presence = queries.length;
       queries.push(db.from('user_presence').select('*'));
+      slots.auditLogs = queries.length;
       queries.push(db.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(250));
     }
     const results = await Promise.all(queries);
     const failed = results.find(r => r.error);
     if (failed) throw failed.error;
-    state.products = results[0].data.map(mapProduct);
-    state.production = results[1].data.map(mapProduction);
-    let index = 2;
-    state.shipments = ['owner', 'admin'].includes(currentRole) ? results[index++].data.map(mapShipment) : [];
-    state.profiles = ['owner', 'admin'].includes(currentRole) ? results[index++].data : [];
-    state.presence = currentRole === 'owner' ? results[index++].data : [];
-    state.auditLogs = currentRole === 'owner' ? results[index++].data : [];
+    state.products = slots.products !== undefined ? results[slots.products].data.map(mapProduct) : [];
+    state.production = slots.production !== undefined ? results[slots.production].data.map(mapProduction) : [];
+    state.shipments = slots.shipments !== undefined ? results[slots.shipments].data.map(mapShipment) : [];
+    state.profiles = slots.profiles !== undefined ? results[slots.profiles].data : [];
+    state.presence = slots.presence !== undefined ? results[slots.presence].data : [];
+    state.auditLogs = slots.auditLogs !== undefined ? results[slots.auditLogs].data : [];
+    applyAccessUI();
     saveState();
   }
 
@@ -259,6 +334,13 @@
         return;
       }
       if (profile.role !== currentRole) setRole(profile.role);
+      let permissionQuery = db.from('user_permissions').select('user_id,permission_key,allowed');
+      if (currentRole !== 'owner') permissionQuery = permissionQuery.eq('user_id', currentUser.id);
+      const { data: permissions, error: permissionError } = await permissionQuery;
+      if (!permissionError) {
+        state.permissions = permissions || [];
+        applyAccessUI();
+      }
     }
     const now = new Date().toISOString();
     const { error } = await db.from('user_presence').upsert({ user_id: currentUser.id, last_seen_at: now, updated_at: now, current_page: page });
@@ -399,8 +481,7 @@
   }
 
   function navigate(view) {
-    if (currentRole === 'engineer' && !['dashboard', 'production', 'records'].includes(view)) view = 'dashboard';
-    if (currentRole === 'admin' && ['users', 'activity', 'system'].includes(view)) view = 'dashboard';
+    if (view !== 'no-access' && !can(view)) view = firstAllowedPage();
     $$('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`));
     $$('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view));
     const [eyebrow, title] = viewMeta[view] || viewMeta.dashboard;
@@ -413,7 +494,7 @@
     if (view === 'products') renderProducts();
     if (view === 'users') renderUsers();
     if (view === 'activity') renderAuditLog();
-    if (currentUser) updatePresence(view);
+    if (currentUser) updatePresence(view === 'no-access' ? 'dashboard' : view);
   }
 
   function setRole(role) {
@@ -424,8 +505,7 @@
     $$('.owner-only').forEach(el => el.classList.toggle('hidden', !isOwner));
     els.roleLabel.textContent = isOwner ? 'مالك' : currentRole === 'admin' ? 'مدير' : 'مهندس';
     updateProductionRequiredState();
-    const activeAdminView = $('.view.active.admin-only');
-    if (!isManagement && activeAdminView) navigate('dashboard');
+    applyAccessUI();
   }
 
   function updateProductionRequiredState() {
@@ -662,6 +742,7 @@
 
   async function saveProduction(event) {
     event.preventDefault();
+    if ((!currentProductionEditId && !can('production', 'create')) || (currentProductionEditId && !(can('production', 'update') || can('records', 'update')))) return toast('لا تملك صلاحية تنفيذ هذه العملية.');
     const valid = validateProductionForm();
     if (!valid) return;
     const isUpdate = Boolean(currentProductionEditId);
@@ -687,10 +768,11 @@
   function editProduction(id) {
     const r = state.production.find(x => x.id === id);
     if (!r) return;
-    const canEdit = ['owner', 'admin'].includes(currentRole) || (currentRole === 'engineer' && r.createdBy === currentUser?.id);
+    const canEdit = (can('production', 'update') || can('records', 'update')) && can('production', 'view') && (['owner', 'admin'].includes(currentRole) || r.createdBy === currentUser?.id);
     if (!canEdit) return toast('لا تملك صلاحية تعديل هذا السجل.');
     currentProductionEditId = id;
     navigate('production');
+    els.productionForm.classList.remove('hidden');
     els.prodDate.value = r.date;
     els.prodShift.value = r.shift;
     renderProductOptions();
@@ -717,7 +799,7 @@
   }
 
   async function deleteProduction(id) {
-    if (!['owner', 'admin'].includes(currentRole)) return toast('الحذف متاح للمدير أو مالك النظام فقط.');
+    if (!(can('production', 'delete') || can('records', 'delete'))) return toast('لا تملك صلاحية حذف سجلات الإنتاج.');
     if (!confirm('حذف سجل الإنتاج نهائيًا؟')) return;
     try { await dbDelete('production_records', id); await loadRemoteState(); renderAll(); toast('تم حذف السجل.'); }
     catch (error) { console.error(error); toast(`تعذر الحذف: ${error.message || error}`); }
@@ -735,6 +817,7 @@
 
   async function saveShipment(event) {
     event.preventDefault();
+    if (!can('shipments', els.shipmentEditId.value ? 'update' : 'create')) return toast('لا تملك صلاحية تنفيذ هذه العملية.');
     const id = els.shipmentEditId.value || uid();
     const shipment = { id, date: els.shipmentDate.value, supplier: els.shipmentSupplier.value.trim(), containerCount: Number(els.containerCount.value || 0), rollCount: Number(els.shipmentRollCount.value || 0), totalWeight: Number(els.shipmentTotalWeight.value || 0), ref: els.shipmentRef.value.trim(), notes: els.shipmentNotes.value.trim(), updatedAt: new Date().toISOString() };
     if (!shipment.date || shipment.containerCount < 1 || shipment.rollCount < 1 || shipment.totalWeight <= 0) return toast('أكمل بيانات الشحنة والأرقام بشكل صحيح.');
@@ -745,6 +828,7 @@
   }
 
   function editShipment(id) {
+    if (!can('shipments', 'update')) return toast('لا تملك صلاحية تعديل الشحنات.');
     const s = state.shipments.find(x => x.id === id);
     if (!s) return;
     els.shipmentEditId.value = s.id;
@@ -761,6 +845,7 @@
   }
 
   async function deleteShipment(id) {
+    if (!can('shipments', 'delete')) return toast('لا تملك صلاحية حذف الشحنات.');
     if (!confirm('حذف هذه الشحنة؟')) return;
     try { await dbDelete('shipments', id); await loadRemoteState(); renderAll(); toast('تم حذف الشحنة.'); }
     catch (error) { console.error(error); toast(`تعذر الحذف: ${error.message || error}`); }
@@ -775,6 +860,7 @@
 
   async function saveProduct(event) {
     event.preventDefault();
+    if (!can('products', els.productEditId.value ? 'update' : 'create')) return toast('لا تملك صلاحية تنفيذ هذه العملية.');
     const id = els.productEditId.value || uid();
     const product = { id, name: els.productName.value.trim(), bagsPerPallet: Number(els.bagsPerPallet.value), packsPerBag: Number(els.packsPerBag.value), unitsPerPack: Number(els.unitsPerPack.value), unitWeightKg: Number(els.unitWeightKg.value) };
     if (!product.name || [product.bagsPerPallet, product.packsPerBag, product.unitsPerPack, product.unitWeightKg].some(n => n <= 0)) return toast('أكمل بيانات الصنف بشكل صحيح.');
@@ -784,6 +870,7 @@
   }
 
   function editProduct(id) {
+    if (!can('products', 'update')) return toast('لا تملك صلاحية تعديل الأصناف.');
     const p = getProduct(id);
     if (!p) return;
     els.productFormPanel.classList.remove('hidden');
@@ -798,6 +885,7 @@
   }
 
   async function deleteProduct(id) {
+    if (!can('products', 'delete')) return toast('لا تملك صلاحية حذف الأصناف.');
     if (state.products.length <= 1) return toast('يجب إبقاء صنف واحد على الأقل.');
     if (state.production.some(r => r.productId === id)) return toast('هذا الصنف مستخدم في سجلات إنتاج، لا يمكن حذفه.');
     if (!confirm('حذف الصنف؟')) return;
@@ -905,7 +993,7 @@
     const rows = [...state.shipments].sort((a,b) => b.date.localeCompare(a.date)).filter(s => !query || [s.supplier,s.ref,s.date].some(v => String(v||'').toLowerCase().includes(query)));
     $('#shipmentsTable').innerHTML = rows.length ? rows.map(s => `<tr>
       <td>${formatDate(s.date)}</td><td>${escapeHtml(s.supplier || '—')}</td><td>${num(s.containerCount)}</td><td>${num(s.rollCount)}</td><td>${num(s.totalWeight,2)} كغم</td><td>${escapeHtml(s.ref || '—')}</td>
-      <td><div class="action-cell"><button class="icon-btn" data-edit-shipment="${s.id}">تعديل</button><button class="danger-btn" data-delete-shipment="${s.id}">حذف</button></div></td></tr>`).join('') : `<tr><td colspan="7"><div class="empty-state">لا توجد شحنات مسجلة.</div></td></tr>`;
+      <td><div class="action-cell">${can('shipments','update') ? `<button class="icon-btn" data-edit-shipment="${s.id}">تعديل</button>` : ''}${can('shipments','delete') ? `<button class="danger-btn" data-delete-shipment="${s.id}">حذف</button>` : ''}</div></td></tr>`).join('') : `<tr><td colspan="7"><div class="empty-state">لا توجد شحنات مسجلة.</div></td></tr>`;
 
     const month = isoToday().slice(0,7);
     const {from,to} = monthRange(month);
@@ -926,7 +1014,7 @@
       const one = calculateOutput(p, 1, 0);
       const packWeight = p.unitsPerPack * p.unitWeightKg;
       return `<article class="product-card">
-        <div class="product-card-head"><div><h3>${escapeHtml(p.name)}</h3><p>الحساب التلقائي لوزن الإنتاج</p></div><div class="action-cell"><button class="icon-btn" data-edit-product="${p.id}">تعديل</button><button class="danger-btn" data-delete-product="${p.id}">حذف</button></div></div>
+        <div class="product-card-head"><div><h3>${escapeHtml(p.name)}</h3><p>الحساب التلقائي لوزن الإنتاج</p></div><div class="action-cell">${can('products','update') ? `<button class="icon-btn" data-edit-product="${p.id}">تعديل</button>` : ''}${can('products','delete') ? `<button class="danger-btn" data-delete-product="${p.id}">حذف</button>` : ''}</div></div>
         <div class="product-formula"><div><span>شوال / مشتاح</span><strong>${num(p.bagsPerPallet)}</strong></div><div><span>حبة / شوال</span><strong>${num(p.packsPerBag)}</strong></div><div><span>صغيرة / حبة</span><strong>${num(p.unitsPerPack)}</strong></div><div><span>وزن العبوة</span><strong>${num(packWeight,2)} كغم</strong></div></div>
         <div class="product-weight">وزن المشتاح المحسوب: ${num(one.weightKg,2)} كغم • ${num(one.units)} حبة صغيرة</div>
       </article>`;
@@ -1038,8 +1126,8 @@
       const creator = profileNames.get(r.createdBy) || r.createdBy || '—';
       const updater = profileNames.get(r.updatedBy) || r.updatedBy || '';
       const updatedMeta = r.updatedBy ? `<span>آخر تعديل بواسطة: ${escapeHtml(updater)}</span><span>آخر تعديل: ${formatTimestamp(r.updatedAt)}</span>` : '';
-      const canEdit = ['owner', 'admin'].includes(currentRole) || (currentRole === 'engineer' && r.createdBy === currentUser?.id);
-      const canDelete = ['owner', 'admin'].includes(currentRole);
+      const canEdit = (can('production','update') || can('records','update')) && can('production','view') && (['owner', 'admin'].includes(currentRole) || r.createdBy === currentUser?.id);
+      const canDelete = can('production','delete') || can('records','delete');
       const actions = `<div class="action-cell">${canEdit ? `<button class="icon-btn" data-edit-production="${r.id}">تعديل</button>` : ''}${canDelete ? `<button class="danger-btn" data-delete-production="${r.id}">حذف</button>` : ''}</div>`;
       return `<tr><td>${formatDate(r.date)}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(r.shift)}</td><td>${escapeHtml(rollText || '—')}</td><td>${num(recordRawWeight(r),2)} كغم</td><td>${num(r.pallets)}</td><td>${num(output.weightKg,2)} كغم</td><td>${num(r.transparentNylonWeight || 0,2)} كغم</td><td>${printedNylonText}</td><td>${num(r.wasteWeight,2)} كغم</td><td><div class="record-meta"><span>أُضيف بواسطة: ${escapeHtml(creator)}</span><span>تاريخ الإضافة: ${formatTimestamp(r.createdAt)}</span>${updatedMeta}</div>${actions}</td></tr>`;
     }).join('') : `<tr><td colspan="11"><div class="empty-state">لا توجد سجلات.</div></td></tr>`;
@@ -1052,7 +1140,8 @@
     if (!els.usersTable) return;
     const names = new Map(state.profiles.map(p => [p.id, p.full_name || p.username]));
     const roleName = role => ({ owner: 'مالك', admin: 'مدير', engineer: 'مهندس' }[role] || role);
-    els.usersTable.innerHTML = state.profiles.length ? state.profiles.map(p => `<tr><td>${escapeHtml(p.full_name || '—')}</td><td>${escapeHtml(p.username || 'غير معيّن')}</td><td><span class="status-chip">${roleName(p.role)}</span></td><td>${p.is_active ? 'نشط' : 'موقوف'}</td><td>${formatTimestamp(p.created_at)}</td><td>${escapeHtml(names.get(p.created_by) || (p.created_by ? '—' : 'حساب رئيسي'))}</td><td>${p.last_login_at ? formatTimestamp(p.last_login_at) : 'لم يسجل الدخول بعد'}</td><td>${p.last_activity_at ? formatTimestamp(p.last_activity_at) : 'لا يوجد نشاط بعد'}</td><td><div class="action-cell"><button class="icon-btn" data-edit-user="${p.id}">تعديل</button><button class="icon-btn" data-reset-password="${p.id}">كلمة المرور</button></div></td></tr>`).join('') : `<tr><td colspan="9"><div class="empty-state">لا توجد حسابات ظاهرة.</div></td></tr>`;
+    els.usersTable.innerHTML = state.profiles.length ? state.profiles.map(p => `<tr><td>${escapeHtml(p.full_name || '—')}</td><td>${escapeHtml(p.username || 'غير معيّن')}</td><td><span class="status-chip">${roleName(p.role)}</span></td><td>${p.is_active ? 'نشط' : 'موقوف'}</td><td>${formatTimestamp(p.created_at)}</td><td>${escapeHtml(names.get(p.created_by) || (p.created_by ? '—' : 'حساب رئيسي'))}</td><td>${p.last_login_at ? formatTimestamp(p.last_login_at) : 'لم يسجل الدخول بعد'}</td><td>${p.last_activity_at ? formatTimestamp(p.last_activity_at) : 'لا يوجد نشاط بعد'}</td><td><div class="action-cell">${currentRole === 'owner' ? `<button class="icon-btn" data-permissions-user="${p.id}">الصلاحيات</button>` : ''}${can('users','update') ? `<button class="icon-btn" data-edit-user="${p.id}">البيانات</button><button class="icon-btn" data-reset-password="${p.id}">كلمة المرور</button>` : ''}</div></td></tr>`).join('') : `<tr><td colspan="9"><div class="empty-state">لا توجد حسابات ظاهرة.</div></td></tr>`;
+    $$('[data-permissions-user]').forEach(btn => btn.addEventListener('click', () => openPermissions(btn.dataset.permissionsUser)));
     $$('[data-edit-user]').forEach(btn => btn.addEventListener('click', () => editUser(btn.dataset.editUser)));
     $$('[data-reset-password]').forEach(btn => btn.addEventListener('click', () => resetUserPassword(btn.dataset.resetPassword)));
     const auditUser = $('#auditUser');
@@ -1063,11 +1152,67 @@
     }
   }
 
+  function openPermissions(id) {
+    if (currentRole !== 'owner') return toast('إدارة الصلاحيات متاحة للمالك فقط.');
+    const user = state.profiles.find(p => p.id === id);
+    if (!user || !els.permissionsDialog) return;
+    permissionUserId = id;
+    const ownerLocked = user.role === 'owner';
+    els.permissionsTitle.textContent = `صلاحيات ${user.full_name || user.username || 'المستخدم'}`;
+    els.permissionsHint.textContent = ownerLocked ? 'حساب المالك يمتلك جميع الصلاحيات ولا يمكن تعطيل أي منها.' : `القيم الحالية مبنية على دور ${user.role === 'admin' ? 'المدير' : 'المهندس'} مع أي overrides محفوظة.`;
+    const actions = Object.keys(ACTION_NAMES);
+    els.permissionsHead.innerHTML = `<tr><th>الصفحة</th>${actions.map(a => `<th>${ACTION_NAMES[a]}</th>`).join('')}</tr>`;
+    els.permissionsBody.innerHTML = Object.entries(PAGE_ACTIONS).map(([page, supported]) => `<tr><th>${PAGE_NAMES[page]}</th>${actions.map(action => {
+      if (!supported.includes(action)) return '<td><span class="permission-na">—</span></td>';
+      const ownerManagedAction = page === 'users' && action !== 'view' && !ownerLocked;
+      const checked = ownerLocked || (!ownerManagedAction && can(page, action, user.id, user.role));
+      const locked = ownerLocked || ownerManagedAction;
+      const lockTitle = ownerManagedAction ? 'إضافة المستخدمين وتعديلهم تبقى للمالك فقط' : '';
+      return `<td><label class="permission-check" title="${lockTitle}"><input type="checkbox" data-permission-page="${page}" data-permission-action="${action}" ${checked ? 'checked' : ''} ${locked ? 'disabled' : ''} /><span>${ACTION_NAMES[action]}</span></label></td>`;
+    }).join('')}</tr>`).join('');
+    $('#savePermissionsBtn').disabled = ownerLocked;
+    $('#resetPermissionDefaults').disabled = ownerLocked;
+    els.permissionsDialog.showModal();
+  }
+
+  function setPermissionCheckboxesToDefaults() {
+    const user = state.profiles.find(p => p.id === permissionUserId);
+    if (!user || user.role === 'owner') return;
+    $$('[data-permission-page]', els.permissionsBody).forEach(input => {
+      input.checked = roleDefault(user.role, input.dataset.permissionPage, input.dataset.permissionAction);
+    });
+  }
+
+  async function saveUserPermissions() {
+    const user = state.profiles.find(p => p.id === permissionUserId);
+    if (!user || user.role === 'owner') return toast('صلاحيات المالك كاملة وثابتة.');
+    const rows = $$('[data-permission-page]', els.permissionsBody).map(input => ({
+      user_id: user.id,
+      permission_key: `${input.dataset.permissionPage}.${input.dataset.permissionAction}`,
+      allowed: input.checked,
+      updated_by: currentUser.id,
+      updated_at: new Date().toISOString()
+    }));
+    try {
+      $('#savePermissionsBtn').disabled = true;
+      const { error } = await db.from('user_permissions').upsert(rows, { onConflict: 'user_id,permission_key' });
+      if (error) throw error;
+      await loadRemoteState();
+      els.permissionsDialog.close();
+      renderUsers();
+      toast('تم حفظ الصلاحيات وربطها بقواعد الحماية.');
+    } catch (error) {
+      console.error(error);
+      toast(`تعذر حفظ الصلاحيات: ${error.message || error}`);
+    } finally { $('#savePermissionsBtn').disabled = false; }
+  }
+
   function formatTimestamp(value) {
     return value ? new Intl.DateTimeFormat('ar-PS', { timeZone: 'Asia/Hebron', day: '2-digit', month: '2-digit', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(value)) : '—';
   }
 
   async function editUser(id) {
+    if (!can('users', 'update')) return toast('لا تملك صلاحية تعديل المستخدمين.');
     const user = state.profiles.find(p => p.id === id);
     if (!user) return;
     const fullName = prompt('الاسم الكامل', user.full_name || '');
@@ -1084,6 +1229,7 @@
   }
 
   async function resetUserPassword(id) {
+    if (!can('users', 'update')) return toast('لا تملك صلاحية إعادة تعيين كلمات المرور.');
     const password = prompt('كلمة المرور الجديدة (8 أحرف على الأقل)');
     if (password === null) return;
     if (password.length < 8) return toast('كلمة المرور قصيرة.');
@@ -1112,7 +1258,7 @@
 
   async function createUserAccount(event) {
     event.preventDefault();
-    if (currentRole !== 'owner') return;
+    if (!can('users', 'create')) return toast('لا تملك صلاحية إضافة المستخدمين.');
     const payload = { full_name: els.newUserFullName.value.trim(), username: els.newUsername.value.trim().toLowerCase(), role: els.newUserRole.value, password: els.newUserPassword.value };
     if (!payload.full_name || !/^[a-z0-9_]{3,30}$/.test(payload.username) || payload.password.length < 8) return toast('تحقق من الاسم واسم المستخدم وكلمة المرور.');
     if (payload.password !== els.newUserPasswordConfirm.value) return toast('كلمتا المرور غير متطابقتين.');
@@ -1135,10 +1281,12 @@
     renderProducts();
     renderReports();
     renderRecords();
-    if (currentRole === 'owner') { renderUsers(); renderAuditLog(); }
+    if (can('users')) renderUsers();
+    if (can('activity')) renderAuditLog();
   }
 
   function exportWeeklyCsv() {
+    if (!can('reports', 'export')) return toast('لا تملك صلاحية تصدير التقارير.');
     const records = recordsInRange(els.reportFrom.value, els.reportTo.value);
     const headers = ['التاريخ','الصنف','الوردية','أكواد الرولات','وزن الرولات كغم','المشاتيح','الشوالات','الحبات','الحبات الصغيرة','وزن الإنتاج كغم','نايلون شفاف كغم','نايلون مطبوع كغم','نايلون مطبوع عدد الرولات','التوالف كغم'];
     const rows = records.sort((a,b)=>a.date.localeCompare(b.date)).map(r => {
@@ -1156,6 +1304,7 @@
   }
 
   function exportBackup() {
+    if (!can('records', 'export')) return toast('لا تملك صلاحية تصدير السجلات.');
     const blob = new Blob([JSON.stringify({ exportedAt: new Date().toISOString(), ...state }, null, 2)], {type:'application/json'});
     downloadBlob(`salima-factory-backup-${isoToday()}.json`, blob);
   }
@@ -1206,11 +1355,13 @@
     $('#refreshReport').addEventListener('click', renderWeeklyReport);
     els.reconcileMonth.addEventListener('change', renderReconciliation);
     $('#exportWeeklyCsv').addEventListener('click', exportWeeklyCsv);
-    $('#printWeeklyReport').addEventListener('click', () => window.print());
+    $('#printWeeklyReport').addEventListener('click', () => can('reports', 'print') ? window.print() : toast('لا تملك صلاحية طباعة التقارير.'));
 
     $('#recordSearch').addEventListener('input', renderRecords);
     $('#exportBackup').addEventListener('click', exportBackup);
     els.userForm.addEventListener('submit', createUserAccount);
+    $('#resetPermissionDefaults').addEventListener('click', setPermissionCheckboxesToDefaults);
+    $('#savePermissionsBtn').addEventListener('click', saveUserPermissions);
     ['auditUser', 'auditDate', 'auditAction', 'auditEntity'].forEach(id => $(`#${id}`)?.addEventListener('change', renderAuditLog));
     document.addEventListener('visibilitychange', () => { if (!document.hidden && currentUser) updatePresence(); });
   }

@@ -20,6 +20,24 @@ create table if not exists public.profiles (
 create unique index if not exists profiles_username_lower_uidx
   on public.profiles (lower(username)) where username is not null;
 
+create table if not exists public.user_permissions (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  permission_key text not null check (permission_key in (
+    'dashboard.view',
+    'production.view','production.create','production.update','production.delete',
+    'shipments.view','shipments.create','shipments.update','shipments.delete',
+    'products.view','products.create','products.update','products.delete',
+    'reports.view','reports.export','reports.print',
+    'records.view','records.update','records.delete','records.export',
+    'users.view','users.create','users.update',
+    'activity.view','system.view'
+  )),
+  allowed boolean not null,
+  updated_by uuid references public.profiles(id),
+  updated_at timestamptz not null default now(),
+  primary key (user_id, permission_key)
+);
+
 create table if not exists public.products (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
@@ -146,6 +164,56 @@ revoke all on function private.current_app_role() from public;
 grant usage on schema private to authenticated;
 grant execute on function private.current_app_role() to authenticated;
 
+create or replace function private.role_has_permission(app_role text, requested_permission text)
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+  select case
+    when app_role = 'owner' then true
+    when app_role = 'admin' then requested_permission in (
+      'dashboard.view',
+      'production.view','production.create','production.update','production.delete',
+      'shipments.view','shipments.create','shipments.update','shipments.delete',
+      'products.view','products.create','products.update','products.delete',
+      'reports.view','reports.export','reports.print',
+      'records.view','records.update','records.delete','records.export'
+    )
+    when app_role = 'engineer' then requested_permission in (
+      'dashboard.view',
+      'production.view','production.create','production.update',
+      'records.view','records.update'
+    )
+    else false
+  end;
+$$;
+
+create or replace function private.has_permission(requested_permission text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select case
+    when p.role = 'owner' then true
+    else coalesce(
+      (select up.allowed
+       from public.user_permissions up
+       where up.user_id = p.id
+         and up.permission_key = requested_permission),
+      private.role_has_permission(p.role, requested_permission)
+    )
+  end
+  from public.profiles p
+  where p.id = (select auth.uid()) and p.is_active = true;
+$$;
+
+revoke all on function private.role_has_permission(text,text) from public;
+revoke all on function private.has_permission(text) from public;
+grant execute on function private.has_permission(text) to authenticated;
+
 create or replace function public.set_actor_columns()
 returns trigger
 language plpgsql
@@ -203,44 +271,108 @@ alter table public.shipments enable row level security;
 alter table public.production_records enable row level security;
 alter table public.audit_logs enable row level security;
 alter table public.user_presence enable row level security;
+alter table public.user_permissions enable row level security;
 
 create policy profiles_select on public.profiles for select to authenticated
-using (id = (select auth.uid()) or (select private.current_app_role()) = 'owner');
+using (
+  id = (select auth.uid())
+  or (select private.has_permission('users.view'))
+  or (select private.has_permission('activity.view'))
+  or (
+    (select private.current_app_role()) in ('owner','admin')
+    and (select private.has_permission('records.view'))
+  )
+);
+
+create policy user_permissions_select on public.user_permissions
+for select to authenticated
+using (user_id = (select auth.uid()) or (select private.current_app_role()) = 'owner');
+create policy user_permissions_insert_owner on public.user_permissions
+for insert to authenticated
+with check ((select private.current_app_role()) = 'owner' and updated_by = (select auth.uid()));
+create policy user_permissions_update_owner on public.user_permissions
+for update to authenticated
+using ((select private.current_app_role()) = 'owner')
+with check ((select private.current_app_role()) = 'owner' and updated_by = (select auth.uid()));
+create policy user_permissions_delete_owner on public.user_permissions
+for delete to authenticated
+using ((select private.current_app_role()) = 'owner');
 
 create policy products_select on public.products for select to authenticated
-using ((select private.current_app_role()) in ('owner','admin','engineer'));
+using (
+  (select private.has_permission('products.view'))
+  or (select private.has_permission('production.view'))
+  or (select private.has_permission('records.view'))
+  or (select private.has_permission('reports.view'))
+  or (select private.has_permission('dashboard.view'))
+);
 create policy products_insert on public.products for insert to authenticated
-with check ((select private.current_app_role()) in ('owner','admin'));
+with check ((select private.has_permission('products.create')));
 create policy products_update on public.products for update to authenticated
-using ((select private.current_app_role()) in ('owner','admin'))
-with check ((select private.current_app_role()) in ('owner','admin'));
+using (
+  (select private.has_permission('products.update'))
+  or (select private.has_permission('products.delete'))
+)
+with check (
+  (select private.has_permission('products.update'))
+  or (select private.has_permission('products.delete'))
+);
 create policy products_delete on public.products for delete to authenticated
-using ((select private.current_app_role()) in ('owner','admin'));
+using ((select private.has_permission('products.delete')));
 
 create policy shipments_select on public.shipments for select to authenticated
-using ((select private.current_app_role()) in ('owner','admin'));
+using (
+  (select private.has_permission('shipments.view'))
+  or (select private.has_permission('reports.view'))
+);
 create policy shipments_insert on public.shipments for insert to authenticated
-with check ((select private.current_app_role()) in ('owner','admin') and created_by = (select auth.uid()));
+with check ((select private.has_permission('shipments.create')) and created_by = (select auth.uid()));
 create policy shipments_update on public.shipments for update to authenticated
-using ((select private.current_app_role()) in ('owner','admin'))
-with check ((select private.current_app_role()) in ('owner','admin'));
+using ((select private.has_permission('shipments.update')))
+with check ((select private.has_permission('shipments.update')));
 create policy shipments_delete on public.shipments for delete to authenticated
-using ((select private.current_app_role()) in ('owner','admin'));
+using ((select private.has_permission('shipments.delete')));
 
 create policy production_select on public.production_records for select to authenticated
-using ((select private.current_app_role()) in ('owner','admin') or created_by = (select auth.uid()));
+using (
+  (
+    (select private.has_permission('production.view'))
+    or (select private.has_permission('records.view'))
+    or (select private.has_permission('reports.view'))
+    or (select private.has_permission('dashboard.view'))
+  )
+  and ((select private.current_app_role()) in ('owner','admin') or created_by = (select auth.uid()))
+);
 create policy production_insert on public.production_records for insert to authenticated
-with check (created_by = (select auth.uid()) and (select private.current_app_role()) in ('owner','admin','engineer'));
+with check ((select private.has_permission('production.create')) and created_by = (select auth.uid()));
 create policy production_update on public.production_records for update to authenticated
-using ((select private.current_app_role()) in ('owner','admin') or (created_by = (select auth.uid()) and production_date = current_date))
-with check ((select private.current_app_role()) in ('owner','admin') or (created_by = (select auth.uid()) and production_date = current_date));
+using (
+  (
+    (select private.has_permission('production.update'))
+    or (select private.has_permission('records.update'))
+  )
+  and ((select private.current_app_role()) in ('owner','admin') or created_by = (select auth.uid()))
+)
+with check (
+  (
+    (select private.has_permission('production.update'))
+    or (select private.has_permission('records.update'))
+  )
+  and ((select private.current_app_role()) in ('owner','admin') or created_by = (select auth.uid()))
+);
 create policy production_delete on public.production_records for delete to authenticated
-using ((select private.current_app_role()) in ('owner','admin'));
+using (
+  (
+    (select private.has_permission('production.delete'))
+    or (select private.has_permission('records.delete'))
+  )
+  and ((select private.current_app_role()) in ('owner','admin') or created_by = (select auth.uid()))
+);
 
 create policy audit_select_owner on public.audit_logs for select to authenticated
-using ((select private.current_app_role()) = 'owner');
+using ((select private.has_permission('activity.view')));
 create policy presence_select_self_or_owner on public.user_presence for select to authenticated
-using (user_id = (select auth.uid()) or (select private.current_app_role()) = 'owner');
+using (user_id = (select auth.uid()) or (select private.has_permission('activity.view')));
 create policy presence_insert_self on public.user_presence for insert to authenticated
 with check (user_id = (select auth.uid()) and (select private.current_app_role()) is not null);
 create policy presence_update_self on public.user_presence for update to authenticated
@@ -259,6 +391,8 @@ revoke all on table public.audit_logs from anon, authenticated;
 grant select on table public.audit_logs to authenticated;
 revoke all on table public.user_presence from anon, authenticated;
 grant select, insert, update on table public.user_presence to authenticated;
+revoke all on table public.user_permissions from anon, authenticated;
+grant select, insert, update, delete on table public.user_permissions to authenticated;
 
 drop trigger if exists set_actor_products on public.products;
 create trigger set_actor_products before insert or update on public.products for each row execute function public.set_actor_columns();
@@ -278,6 +412,7 @@ drop trigger if exists sync_presence_activity on public.user_presence;
 create trigger sync_presence_activity after insert or update on public.user_presence for each row execute function public.sync_presence_activity();
 
 create index if not exists user_presence_last_seen_idx on public.user_presence(last_seen_at desc);
+create index if not exists user_permissions_user_idx on public.user_permissions(user_id);
 create index if not exists audit_logs_created_at_idx on public.audit_logs(created_at desc);
 create index if not exists audit_logs_filters_idx on public.audit_logs(user_id, entity_type, action, created_at desc);
 

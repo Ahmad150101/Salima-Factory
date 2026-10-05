@@ -38,13 +38,13 @@
       <nav class="nav-list" aria-label="التنقل الرئيسي">
         <button class="nav-item active" data-view="dashboard"><span class="nav-icon">⌂</span><span>لوحة التحكم</span></button>
         <button class="nav-item" data-view="production"><span class="nav-icon">⚙</span><span>الإنتاج اليومي</span></button>
-        <button class="nav-item admin-only" data-view="shipments"><span class="nav-icon">▣</span><span>الشحنات الواردة</span></button>
-        <button class="nav-item admin-only" data-view="products"><span class="nav-icon">◫</span><span>الأصناف</span></button>
-        <button class="nav-item admin-only" data-view="reports"><span class="nav-icon">▤</span><span>التقارير</span></button>
-        <button class="nav-item" data-view="records"><span class="nav-icon">⌕</span><span>سجلاتي</span></button>
-        <button class="nav-item owner-only" data-view="users"><span class="nav-icon">♙</span><span>إدارة المستخدمين</span></button>
-        <button class="nav-item owner-only" data-view="activity"><span class="nav-icon">◎</span><span>سجل النشاط</span></button>
-        <button class="nav-item owner-only" data-view="system"><span class="nav-icon">⚙</span><span>إدارة النظام</span></button>
+        <button class="nav-item" data-view="shipments"><span class="nav-icon">▣</span><span>الشحنات الواردة</span></button>
+        <button class="nav-item" data-view="products"><span class="nav-icon">◫</span><span>الأصناف</span></button>
+        <button class="nav-item" data-view="reports"><span class="nav-icon">▤</span><span>التقارير</span></button>
+        <button class="nav-item" data-view="records"><span class="nav-icon">⌕</span><span>سجل الإنتاج</span></button>
+        <button class="nav-item" data-view="users"><span class="nav-icon">♙</span><span>إدارة المستخدمين</span></button>
+        <button class="nav-item" data-view="activity"><span class="nav-icon">◎</span><span>سجل النشاط</span></button>
+        <button class="nav-item" data-view="system"><span class="nav-icon">⚙</span><span>إدارة النظام</span></button>
       </nav>
 
       <div class="sidebar-footer">
@@ -78,7 +78,7 @@
             <span class="hero-kicker">الإنتاج • الخام • التوالف</span>
             <h2>صورة يومية واضحة للمصنع من أول رولة حتى المنتج النهائي.</h2>
           </div>
-          <button class="primary-btn" data-go="production">+ تسجيل إنتاج اليوم</button>
+          <button class="primary-btn" data-go="production" data-action-control="production:create">+ تسجيل إنتاج اليوم</button>
         </div>
 
         <div class="stats-grid">
@@ -196,14 +196,14 @@
         </form>
       </dialog>
 
-      <section class="view admin-only" id="view-shipments">
+      <section class="view" id="view-shipments">
         <div class="section-intro">
           <div><span class="eyebrow">إدخال المدير</span><h2>الشحنات الواردة</h2></div>
-          <button class="primary-btn" id="focusShipmentForm">+ إضافة شحنة</button>
+          <button class="primary-btn" id="focusShipmentForm" data-action-control="shipments:create">+ إضافة شحنة</button>
         </div>
 
         <div class="split-layout">
-          <article class="panel" id="shipmentFormPanel">
+          <article class="panel" id="shipmentFormPanel" data-action-any="shipments:create,shipments:update">
             <div class="panel-head"><div><h3 id="shipmentFormTitle">شحنة جديدة</h3></div></div>
             <form id="shipmentForm">
               <input type="hidden" id="shipmentEditId" />
@@ -232,10 +232,10 @@
         </article>
       </section>
 
-      <section class="view admin-only" id="view-products">
+      <section class="view" id="view-products">
         <div class="section-intro">
           <div><span class="eyebrow">تعريف الإنتاج</span><h2>الأصناف والتعبئة</h2></div>
-          <button class="primary-btn" id="toggleProductForm">+ صنف جديد</button>
+          <button class="primary-btn" id="toggleProductForm" data-action-control="products:create">+ صنف جديد</button>
         </div>
 
         <article class="panel hidden" id="productFormPanel">
@@ -255,7 +255,7 @@
         <div class="product-grid" id="productsGrid"></div>
       </section>
 
-      <section class="view admin-only" id="view-reports">
+      <section class="view" id="view-reports">
         <div class="section-intro">
           <div><span class="eyebrow">تقارير الإدارة</span><h2>التقرير الأسبوعي والمقارنة الشهرية</h2></div>
         </div>
@@ -284,7 +284,7 @@
             <img src="assets/salima-logo.png" alt="سليمة" />
             <div><h3>تقرير الإنتاج الأسبوعي</h3><p id="reportPeriodLabel"></p></div>
           </div>
-          <div class="panel-head"><div><span class="eyebrow">يوميًا</span><h3>ملخص كل يوم</h3></div><div class="button-row"><button class="secondary-btn" id="exportWeeklyCsv" type="button">تصدير CSV</button><button class="secondary-btn" id="printWeeklyReport" type="button">طباعة / PDF</button></div></div>
+          <div class="panel-head"><div><span class="eyebrow">يوميًا</span><h3>ملخص كل يوم</h3></div><div class="button-row"><button class="secondary-btn" id="exportWeeklyCsv" data-action-control="reports:export" type="button">تصدير CSV</button><button class="secondary-btn" id="printWeeklyReport" data-action-control="reports:print" type="button">طباعة / PDF</button></div></div>
           <div class="table-scroll"><table class="data-table report-table"><thead><tr><th>اليوم / التاريخ</th><th>الأصناف</th><th>عدد الرولات</th><th>وزن الرولات</th><th>المشاتيح</th><th>وزن الإنتاج</th><th>شفاف كغم</th><th>مطبوع كغم</th><th>مطبوع رولات</th><th>التوالف</th></tr></thead><tbody id="weeklyDailyTable"></tbody><tfoot id="weeklyDailyFoot"></tfoot></table></div>
           <div class="report-section"><h4>تفصيل حسب الصنف</h4><div class="table-scroll"><table class="data-table"><thead><tr><th>الصنف</th><th>المشاتيح</th><th>الشوالات</th><th>الحبات</th><th>الحبات الصغيرة</th><th>وزن الإنتاج</th></tr></thead><tbody id="weeklyProductTable"></tbody></table></div></div>
         </article>
@@ -299,7 +299,7 @@
       <section class="view" id="view-records">
         <div class="section-intro">
           <div><span class="eyebrow">الأرشيف</span><h2>سجل الإنتاج</h2></div>
-          <button class="secondary-btn admin-only" id="exportBackup" type="button">نسخة احتياطية JSON</button>
+          <button class="secondary-btn" id="exportBackup" data-action-control="records:export" type="button">نسخة احتياطية JSON</button>
         </div>
         <article class="panel table-panel">
           <div class="panel-head"><input class="search-input wide" id="recordSearch" placeholder="ابحث بالصنف، كود الرولة أو التاريخ..." /></div>
@@ -307,12 +307,12 @@
         </article>
       </section>
 
-      <section class="view owner-only" id="view-users">
+      <section class="view" id="view-users">
         <div class="section-intro">
           <div><span class="eyebrow">الإدارة</span><h2>حسابات المستخدمين</h2></div>
         </div>
         <div class="split-layout">
-          <article class="panel">
+          <article class="panel" data-action-control="users:create">
             <div class="panel-head"><div><h3>إضافة مستخدم</h3><span class="muted">كلمة المرور تُرسل مباشرة إلى خدمة المصادقة ولا تُحفظ داخل الواجهة.</span></div></div>
             <form id="userForm">
               <div class="form-grid cols-2">
@@ -332,7 +332,22 @@
         </div>
       </section>
 
-      <section class="view owner-only" id="view-activity">
+      <dialog id="permissionsDialog" class="permissions-dialog" aria-labelledby="permissionsTitle">
+        <form method="dialog" id="permissionsForm">
+          <div class="panel-head permissions-head">
+            <div><span class="eyebrow">صلاحيات تفصيلية</span><h3 id="permissionsTitle">صلاحيات المستخدم</h3><p class="muted" id="permissionsHint"></p></div>
+            <button value="cancel" class="icon-btn" aria-label="إغلاق">✕</button>
+          </div>
+          <div class="permission-table-wrap"><table class="data-table permission-table"><thead id="permissionsHead"></thead><tbody id="permissionsBody"></tbody></table></div>
+          <p class="info-note">القيم الافتراضية تأتي من الدور. أي تعديل هنا هو override خاص بالمستخدم، بينما تبقى كل صلاحيات المالك مفعّلة دائمًا.</p>
+          <div class="form-actions inside-form">
+            <button type="button" class="secondary-btn" id="resetPermissionDefaults">استعادة افتراضات الدور</button>
+            <button type="button" class="primary-btn" id="savePermissionsBtn">حفظ الصلاحيات</button>
+          </div>
+        </form>
+      </dialog>
+
+      <section class="view" id="view-activity">
         <div class="section-intro"><div><span class="eyebrow">الرقابة</span><h2>سجل النشاط</h2></div></div>
         <article class="panel report-controls"><div class="report-filter">
           <label>المستخدم<select id="auditUser"><option value="">الكل</option></select></label>
@@ -343,9 +358,13 @@
         <article class="panel table-panel"><div class="table-scroll"><table class="data-table"><thead><tr><th>المستخدم</th><th>العملية</th><th>السجل</th><th>الوقت</th><th>التفاصيل</th></tr></thead><tbody id="auditTable"></tbody></table></div></article>
       </section>
 
-      <section class="view owner-only" id="view-system">
+      <section class="view" id="view-system">
         <div class="section-intro"><div><h2>إدارة النظام</h2></div></div>
         <div class="dashboard-grid"><article class="panel"><h3>قاعدة البيانات</h3><a class="primary-btn" target="_blank" rel="noopener noreferrer" href="https://supabase.com/dashboard/project/vahiafnjimmtokacmwwd">فتح قاعدة البيانات</a></article><article class="panel"><h3>GitHub</h3><a class="secondary-btn" target="_blank" rel="noopener noreferrer" href="https://github.com/Ahmad150101/Salima-Factory">فتح GitHub</a></article></div>
+      </section>
+
+      <section class="view" id="view-no-access">
+        <article class="panel empty-state access-empty"><h2>لا توجد صفحات متاحة لهذا الحساب</h2><p>راجع مالك النظام لتفعيل الصلاحيات المطلوبة.</p></article>
       </section>
     </main>
   </div>
