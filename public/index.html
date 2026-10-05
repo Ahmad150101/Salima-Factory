@@ -257,10 +257,10 @@
 
       <section class="view" id="view-reports">
         <div class="section-intro">
-          <div><span class="eyebrow">تقارير الإدارة</span><h2>التقرير الأسبوعي والمقارنة الشهرية</h2></div>
+          <div><span class="eyebrow" id="reportsEyebrow">تقارير الإدارة</span><h2 id="reportsTitle">التقرير الأسبوعي والمقارنة الشهرية</h2></div>
         </div>
 
-        <article class="panel report-controls">
+        <article class="panel report-controls" data-report-scope="management">
           <div class="report-filter">
             <label>من<input type="date" id="reportFrom" /></label>
             <label>إلى<input type="date" id="reportTo" /></label>
@@ -269,7 +269,7 @@
           </div>
         </article>
 
-        <div class="stats-grid report-stats">
+        <div class="stats-grid report-stats" data-report-scope="management">
           <article class="stat-card"><span>وزن الرولات</span><strong id="reportRaw">0</strong><small>كغم</small></article>
           <article class="stat-card"><span>وزن الإنتاج</span><strong id="reportProductionWeight">0</strong><small>كغم</small></article>
           <article class="stat-card"><span>المشاتيح</span><strong id="reportPallets">0</strong><small>مشتاح</small></article>
@@ -279,7 +279,21 @@
           <article class="stat-card"><span>نايلون مطبوع - رولات</span><strong id="reportPrintedNylonRolls">0</strong><small>رولة</small></article>
         </div>
 
-        <article class="panel table-panel printable" id="printableWeeklyReport">
+        <article class="panel engineer-weekly-report hidden" id="engineerWeeklyReport" data-report-scope="engineer">
+          <div class="panel-head">
+            <div><span class="eyebrow">من السبت إلى الجمعة</span><h3>ملخص إنتاجك للأسبوع الحالي</h3><p class="report-scope-note" id="engineerReportPeriodLabel"></p></div>
+            <div class="button-row"><button class="secondary-btn" id="exportEngineerWeeklyCsv" data-action-control="reports:export" type="button">تصدير CSV</button><button class="secondary-btn" id="printEngineerWeeklyReport" data-action-control="reports:print" type="button">طباعة / PDF</button></div>
+          </div>
+          <div class="stats-grid report-stats engineer-report-stats">
+            <article class="stat-card" data-report-metric="pallets"><span>عدد المشاتيح المنتجة</span><strong id="engineerReportPallets">0</strong><small>مشتاح</small></article>
+            <article class="stat-card" data-report-metric="production-weight"><span>وزن الإنتاج</span><strong id="engineerReportProductionWeight">0</strong><small>كغم</small></article>
+            <article class="stat-card" data-report-metric="printed-weight"><span>النايلون المطبوع</span><strong id="engineerReportPrintedNylonWeight">0</strong><small>كغم</small></article>
+            <article class="stat-card" data-report-metric="printed-rolls"><span>رولات النايلون المطبوع</span><strong id="engineerReportPrintedNylonRolls">0</strong><small>رولة</small></article>
+          </div>
+          <p class="info-note">يعرض هذا الملخص بياناتك المتاحة للأسبوع الحالي فقط وفق صلاحيات قاعدة البيانات.</p>
+        </article>
+
+        <article class="panel table-panel printable" id="printableWeeklyReport" data-report-scope="management">
           <div class="report-print-head">
             <img src="assets/salima-logo.png" alt="سليمة" />
             <div><h3>تقرير الإنتاج الأسبوعي</h3><p id="reportPeriodLabel"></p></div>
@@ -289,7 +303,7 @@
           <div class="report-section"><h4>تفصيل حسب الصنف</h4><div class="table-scroll"><table class="data-table"><thead><tr><th>الصنف</th><th>المشاتيح</th><th>الشوالات</th><th>الحبات</th><th>الحبات الصغيرة</th><th>وزن الإنتاج</th></tr></thead><tbody id="weeklyProductTable"></tbody></table></div></div>
         </article>
 
-        <article class="panel monthly-reconciliation">
+        <article class="panel monthly-reconciliation" data-report-scope="management">
           <div class="panel-head"><div><span class="eyebrow">آخر الشهر</span><h3>مقارنة الوارد مع إدخال المهندس</h3></div><label class="month-picker">الشهر<input type="month" id="reconcileMonth" /></label></div>
           <div class="reconcile-grid" id="reconcileCards"></div>
           <p class="info-note">الرصيد هنا تقديري: إجمالي الوزن الداخل حسب المدير ناقص إجمالي وزن الرولات المسجل في الإنتاج. هذا الرقم مقارنة تشغيلية بين الوارد والمسجل بالإنتاج، ويمكن إضافة رصيد أول المدة وإقفال الشهر لاحقًا.</p>
@@ -302,7 +316,16 @@
           <button class="secondary-btn" id="exportBackup" data-action-control="records:export" type="button">نسخة احتياطية JSON</button>
         </div>
         <article class="panel table-panel">
-          <div class="panel-head"><input class="search-input wide" id="recordSearch" placeholder="ابحث بالصنف، كود الرولة أو التاريخ..." /></div>
+          <div class="panel-head records-panel-head">
+            <div><span class="eyebrow">نطاق السجلات</span><p class="records-scope-note" id="recordsScopeNote"></p></div>
+            <div class="records-toolbar">
+              <input class="search-input wide" id="recordSearch" placeholder="ابحث بالصنف أو كود الرولة..." />
+              <div class="record-date-controls" id="recordDateControls">
+                <label>تاريخ السجل<input type="date" id="recordDateFilter" /></label>
+                <button class="secondary-btn" id="clearRecordDateFilter" type="button">مسح التاريخ</button>
+              </div>
+            </div>
+          </div>
           <div class="table-scroll"><table class="data-table"><thead><tr><th>التاريخ</th><th>الصنف</th><th>الوردية</th><th>الرولات</th><th>وزن الرولات</th><th>المشاتيح</th><th>وزن الإنتاج</th><th>نايلون شفاف</th><th>نايلون مطبوع</th><th>التوالف</th><th>إجراءات</th></tr></thead><tbody id="recordsTable"></tbody></table></div>
         </article>
       </section>

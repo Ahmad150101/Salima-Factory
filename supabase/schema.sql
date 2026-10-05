@@ -157,6 +157,30 @@ revoke all on function private.current_app_role() from public;
 grant usage on schema private to authenticated;
 grant execute on function private.current_app_role() to authenticated;
 
+create or replace function private.factory_today()
+returns date
+language sql
+stable
+set search_path = ''
+as $$
+  select (now() at time zone 'Asia/Hebron')::date;
+$$;
+
+create or replace function private.current_week_start()
+returns date
+language sql
+stable
+set search_path = ''
+as $$
+  select private.factory_today()
+         - (((extract(dow from private.factory_today())::integer + 1) % 7));
+$$;
+
+revoke all on function private.factory_today() from public;
+revoke all on function private.current_week_start() from public;
+grant execute on function private.factory_today() to authenticated;
+grant execute on function private.current_week_start() to authenticated;
+
 create or replace function private.role_has_permission(app_role text, requested_permission text)
 returns boolean
 language sql
@@ -176,7 +200,8 @@ as $$
     when app_role = 'engineer' then requested_permission in (
       'dashboard.view',
       'production.view','production.create','production.update',
-      'records.view','records.update'
+      'records.view','records.update',
+      'reports.view'
     )
     else false
   end;
@@ -316,7 +341,10 @@ using ((select private.has_permission('products.delete')));
 create policy shipments_select on public.shipments for select to authenticated
 using (
   (select private.has_permission('shipments.view'))
-  or (select private.has_permission('reports.view'))
+  or (
+    (select private.current_app_role()) in ('owner','admin')
+    and (select private.has_permission('reports.view'))
+  )
 );
 create policy shipments_insert on public.shipments for insert to authenticated
 with check ((select private.has_permission('shipments.create')) and created_by = (select auth.uid()));
@@ -334,24 +362,59 @@ using (
     or (select private.has_permission('reports.view'))
     or (select private.has_permission('dashboard.view'))
   )
-  and ((select private.current_app_role()) in ('owner','admin') or created_by = (select auth.uid()))
+  and (
+    (select private.current_app_role()) in ('owner','admin')
+    or (
+      (select private.current_app_role()) = 'engineer'
+      and created_by = (select auth.uid())
+      and production_date >= (select private.current_week_start())
+      and production_date <= (select private.factory_today())
+    )
+  )
 );
 create policy production_insert on public.production_records for insert to authenticated
-with check ((select private.has_permission('production.create')) and created_by = (select auth.uid()));
+with check (
+  (select private.has_permission('production.create'))
+  and created_by = (select auth.uid())
+  and (
+    (select private.current_app_role()) in ('owner','admin')
+    or (
+      (select private.current_app_role()) = 'engineer'
+      and production_date >= (select private.current_week_start())
+      and production_date <= (select private.factory_today())
+    )
+  )
+);
 create policy production_update on public.production_records for update to authenticated
 using (
   (
     (select private.has_permission('production.update'))
     or (select private.has_permission('records.update'))
   )
-  and ((select private.current_app_role()) in ('owner','admin') or created_by = (select auth.uid()))
+  and (
+    (select private.current_app_role()) in ('owner','admin')
+    or (
+      (select private.current_app_role()) = 'engineer'
+      and created_by = (select auth.uid())
+      and production_date >= (select private.current_week_start())
+      and production_date <= (select private.factory_today())
+    )
+  )
 )
 with check (
   (
     (select private.has_permission('production.update'))
     or (select private.has_permission('records.update'))
   )
-  and ((select private.current_app_role()) in ('owner','admin') or created_by = (select auth.uid()))
+  and (
+    (select private.current_app_role()) in ('owner','admin')
+    or (
+      (select private.current_app_role()) = 'engineer'
+      and created_by = (select auth.uid())
+      and production_date >= (select private.current_week_start())
+      and production_date <= (select private.factory_today())
+    )
+  )
 );
 create policy production_delete on public.production_records for delete to authenticated
 using (
@@ -359,7 +422,7 @@ using (
     (select private.has_permission('production.delete'))
     or (select private.has_permission('records.delete'))
   )
-  and ((select private.current_app_role()) in ('owner','admin') or created_by = (select auth.uid()))
+  and (select private.current_app_role()) in ('owner','admin')
 );
 
 create policy audit_select_owner on public.audit_logs for select to authenticated

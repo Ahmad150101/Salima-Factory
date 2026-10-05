@@ -3,6 +3,7 @@
 
   const CACHE_KEY = 'salimaFactoryCloudCacheV4';
   const THEME_KEY = 'salimaFactoryTheme';
+  const DATA_PAGE_SIZE = 500;
   const DEFAULT_PRODUCTS = [
     { id: 'mona', name: 'محارم المنى 1.2 كغم', bagsPerPallet: 27, packsPerBag: 10, unitsPerPack: 6, unitWeightKg: 0.2 },
     { id: 'maram', name: 'محارم المرام 1 كغم', bagsPerPallet: 30, packsPerBag: 10, unitsPerPack: 5, unitWeightKg: 0.2 },
@@ -107,6 +108,9 @@
     reportFrom: $('#reportFrom'),
     reportTo: $('#reportTo'),
     reconcileMonth: $('#reconcileMonth'),
+    recordDateFilter: $('#recordDateFilter'),
+    clearRecordDateFilter: $('#clearRecordDateFilter'),
+    recordsScopeNote: $('#recordsScopeNote'),
     themeToggle: $('#themeToggle'),
     themeToggleIcon: $('#themeToggleIcon'),
     themeToggleText: $('#themeToggleText'),
@@ -180,16 +184,32 @@
     if (role === 'owner') return true;
     const defaults = {
       admin: { dashboard: ['view'], production: ['view','create','update','delete'], shipments: ['view','create','update','delete'], products: ['view','create','update','delete'], reports: ['view','export','print'], records: ['view','update','delete','export'] },
-      engineer: { dashboard: ['view'], production: ['view','create','update'], records: ['view','update'] }
+      engineer: { dashboard: ['view'], production: ['view','create','update'], reports: ['view'], records: ['view','update'] }
     };
     return Boolean(defaults[role]?.[page]?.includes(action));
   }
 
   function can(page, action = 'view', userId = currentUser?.id, role = currentRole) {
     if (role === 'owner') return true;
+    if (role === 'engineer' && action === 'delete' && ['production', 'records'].includes(page)) return false;
     if (page === 'users' && ['create', 'update'].includes(action)) return false;
     const override = state.permissions.find(p => p.user_id === userId && p.permission_key === `${page}.${action}`);
     return override ? override.allowed === true : roleDefault(role, page, action);
+  }
+
+  function canOpenView(page) {
+    if (can(page)) return true;
+    return page === 'production'
+      && Boolean(currentProductionEditId)
+      && can('records')
+      && (can('records', 'update') || can('production', 'update'));
+  }
+
+  function permissionSignature(permissions) {
+    return [...(permissions || [])]
+      .map(permission => `${permission.user_id}|${permission.permission_key}|${permission.allowed === true}`)
+      .sort()
+      .join('\n');
   }
 
   function applyAccessUI() {
@@ -197,7 +217,7 @@
     $$('.nav-item[data-view]').forEach(el => el.classList.toggle('hidden', !can(el.dataset.view)));
     Object.keys(PAGE_ACTIONS).forEach(page => {
       const view = $(`#view-${page}`);
-      if (view) view.classList.toggle('permission-hidden', !can(page));
+      if (view) view.classList.toggle('permission-hidden', !canOpenView(page));
     });
     $$('[data-action-control]').forEach(el => {
       const [page, action] = el.dataset.actionControl.split(':');
@@ -213,11 +233,43 @@
     const addProduction = can('production', 'create');
     if (els.productionForm) els.productionForm.classList.toggle('hidden', !addProduction && !currentProductionEditId);
     const activePage = $('.view.active')?.id?.replace('view-', '');
-    if (activePage && !can(activePage)) navigate(firstAllowedPage());
+    if (activePage && !canOpenView(activePage)) navigate(firstAllowedPage());
+    applyRoleScopedUI();
+  }
+
+  function applyRoleScopedUI() {
+    const isEngineer = currentRole === 'engineer';
+    $$('[data-report-scope="engineer"]').forEach(el => el.classList.toggle('hidden', !isEngineer));
+    $$('[data-report-scope="management"]').forEach(el => el.classList.toggle('hidden', isEngineer));
+    $('#recordDateControls')?.classList.toggle('hidden', isEngineer);
+    if ($('#reportsEyebrow')) $('#reportsEyebrow').textContent = isEngineer ? 'تقرير المهندس' : 'تقارير الإدارة';
+    if ($('#reportsTitle')) $('#reportsTitle').textContent = isEngineer ? 'ملخص الأسبوع الحالي' : 'التقرير الأسبوعي والمقارنة الشهرية';
   }
 
   function firstAllowedPage() {
     return Object.keys(PAGE_ACTIONS).find(page => can(page)) || 'no-access';
+  }
+
+  async function fetchAllRows(buildQuery) {
+    const rows = [];
+    for (let from = 0; ; from += DATA_PAGE_SIZE) {
+      const { data, error } = await buildQuery().range(from, from + DATA_PAGE_SIZE - 1);
+      if (error) return { data: [], error };
+      const page = data || [];
+      rows.push(...page);
+      if (page.length < DATA_PAGE_SIZE) break;
+    }
+    return { data: rows, error: null };
+  }
+
+  function scrubLoadedDataForAccessChange() {
+    const permissions = state.permissions;
+    state = { products: [], shipments: [], production: [], profiles: [], presence: [], auditLogs: [], permissions };
+    currentProductionEditId = null;
+    resetProductionForm();
+    renderAll();
+    applyAccessUI();
+    saveState();
   }
 
   async function loadRemoteState() {
@@ -229,11 +281,27 @@
     const slots = {};
     if (can('production') || can('records') || can('reports') || can('dashboard')) {
       slots.products = queries.length; queries.push(db.from('products').select('*').eq('is_active', true).order('name'));
-      slots.production = queries.length; queries.push(db.from('production_records').select('*').order('production_date', { ascending: false }));
+      slots.production = queries.length;
+      queries.push(fetchAllRows(() => {
+        let query = db.from('production_records').select('*');
+        if (currentRole === 'engineer') {
+          const { from, today } = currentWeekRange();
+          query = query
+            .eq('created_by', currentUser.id)
+            .gte('production_date', from)
+            .lte('production_date', today);
+        }
+        return query.order('production_date', { ascending: false }).order('id', { ascending: false });
+      }));
     }
-    if (can('shipments') || can('reports')) {
+    const shouldLoadShipments = currentRole === 'engineer'
+      ? can('shipments')
+      : can('shipments') || can('reports');
+    if (shouldLoadShipments) {
       slots.shipments = queries.length;
-      queries.push(db.from('shipments').select('*').order('shipment_date', { ascending: false }));
+      queries.push(fetchAllRows(() => db.from('shipments').select('*')
+        .order('shipment_date', { ascending: false })
+        .order('id', { ascending: false })));
     }
     if (can('users') || can('activity') || (['owner', 'admin'].includes(currentRole) && can('records'))) {
       slots.profiles = queries.length;
@@ -333,13 +401,39 @@
         await db.auth.signOut();
         return;
       }
-      if (profile.role !== currentRole) setRole(profile.role);
+      const activePage = $('.view.active')?.id?.replace('view-', '') || page;
+      const effectiveRole = ['owner', 'admin', 'engineer'].includes(profile.role) ? profile.role : 'engineer';
+      const roleChanged = effectiveRole !== currentRole;
+      const previousPermissions = permissionSignature(state.permissions);
+      if (roleChanged) {
+        state.permissions = [];
+        currentUser.profile = { ...(currentUser.profile || {}), role: effectiveRole };
+        setRole(effectiveRole);
+        els.userTitle.textContent = currentUser.profile.full_name || (effectiveRole === 'owner' ? 'مالك النظام' : effectiveRole === 'admin' ? 'مدير المصنع' : 'مهندس الإنتاج');
+        scrubLoadedDataForAccessChange();
+      }
       let permissionQuery = db.from('user_permissions').select('user_id,permission_key,allowed');
-      if (currentRole !== 'owner') permissionQuery = permissionQuery.eq('user_id', currentUser.id);
+      if (effectiveRole !== 'owner') permissionQuery = permissionQuery.eq('user_id', currentUser.id);
       const { data: permissions, error: permissionError } = await permissionQuery;
       if (!permissionError) {
-        state.permissions = permissions || [];
-        applyAccessUI();
+        const nextPermissions = permissions || [];
+        const permissionsChanged = permissionSignature(nextPermissions) !== previousPermissions;
+        state.permissions = nextPermissions;
+        if (roleChanged || permissionsChanged) {
+          if (!roleChanged) scrubLoadedDataForAccessChange();
+          try {
+            await loadRemoteState();
+            renderAll();
+          } catch (error) {
+            console.warn('Access-scoped data reload failed', error?.message || error);
+          }
+          navigate(canOpenView(activePage) ? activePage : firstAllowedPage());
+        } else {
+          applyAccessUI();
+        }
+      } else if (roleChanged) {
+        console.warn('Permission refresh failed after role change', permissionError.message || permissionError);
+        navigate(firstAllowedPage());
       }
     }
     const now = new Date().toISOString();
@@ -435,8 +529,8 @@
   function startOfWeek(date = new Date()) {
     const d = new Date(date);
     d.setHours(12, 0, 0, 0);
-    const day = d.getDay(); // Sunday = 0
-    d.setDate(d.getDate() - day);
+    const daysSinceSaturday = (d.getDay() + 1) % 7;
+    d.setDate(d.getDate() - daysSinceSaturday);
     return d;
   }
 
@@ -449,6 +543,16 @@
   function dateToIso(d) {
     const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
     return local.toISOString().slice(0, 10);
+  }
+
+  function currentWeekRange() {
+    const today = isoToday();
+    const todayAtNoon = new Date(`${today}T12:00:00`);
+    return {
+      from: dateToIso(startOfWeek(todayAtNoon)),
+      to: dateToIso(endOfWeek(todayAtNoon)),
+      today
+    };
   }
 
   function monthRange(monthValue) {
@@ -481,10 +585,12 @@
   }
 
   function navigate(view) {
-    if (view !== 'no-access' && !can(view)) view = firstAllowedPage();
+    if (view !== 'no-access' && !canOpenView(view)) view = firstAllowedPage();
     $$('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`));
     $$('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === view));
-    const [eyebrow, title] = viewMeta[view] || viewMeta.dashboard;
+    const [eyebrow, title] = view === 'reports' && currentRole === 'engineer'
+      ? ['المهندس', 'تقرير الأسبوع الحالي']
+      : (viewMeta[view] || viewMeta.dashboard);
     els.pageEyebrow.textContent = eyebrow;
     els.pageTitle.textContent = title;
     els.sidebar.classList.remove('open');
@@ -506,6 +612,7 @@
     els.roleLabel.textContent = isOwner ? 'مالك' : currentRole === 'admin' ? 'مدير' : 'مهندس';
     updateProductionRequiredState();
     applyAccessUI();
+    applyRoleScopedUI();
   }
 
   function updateProductionRequiredState() {
@@ -592,6 +699,13 @@
     renderProductOptions();
     updateRawTotal();
     updateProductionCalculation();
+  }
+
+  function clearProductionFormAndRestoreView() {
+    const returnToRecords = !can('production') && can('records');
+    resetProductionForm();
+    applyAccessUI();
+    if (returnToRecords) navigate('records');
   }
 
   function clearProductionErrors() {
@@ -768,9 +882,16 @@
   function editProduction(id) {
     const r = state.production.find(x => x.id === id);
     if (!r) return;
-    const canEdit = (can('production', 'update') || can('records', 'update')) && can('production', 'view') && (['owner', 'admin'].includes(currentRole) || r.createdBy === currentUser?.id);
+    const { from: weekFrom, today } = currentWeekRange();
+    const engineerOwnCurrentWeek = currentRole !== 'engineer'
+      || (r.createdBy === currentUser?.id && r.date >= weekFrom && r.date <= today);
+    const canEdit = (can('production', 'update') || can('records', 'update'))
+      && (can('production') || can('records'))
+      && engineerOwnCurrentWeek
+      && (['owner', 'admin'].includes(currentRole) || r.createdBy === currentUser?.id);
     if (!canEdit) return toast('لا تملك صلاحية تعديل هذا السجل.');
     currentProductionEditId = id;
+    applyAccessUI();
     navigate('production');
     els.productionForm.classList.remove('hidden');
     els.prodDate.value = r.date;
@@ -799,6 +920,7 @@
   }
 
   async function deleteProduction(id) {
+    if (currentRole === 'engineer') return toast('حذف سجلات الإنتاج غير متاح للمهندس.');
     if (!(can('production', 'delete') || can('records', 'delete'))) return toast('لا تملك صلاحية حذف سجلات الإنتاج.');
     if (!confirm('حذف سجل الإنتاج نهائيًا؟')) return;
     try { await dbDelete('production_records', id); await loadRemoteState(); renderAll(); toast('تم حذف السجل.'); }
@@ -969,8 +1091,7 @@
   }
 
   function renderWeeklySummary() {
-    const from = dateToIso(startOfWeek());
-    const to = dateToIso(endOfWeek());
+    const { from, to } = currentWeekRange();
     const records = state.production.filter(r => r.date >= from && r.date <= to);
     const raw = sum(records, recordRawWeight);
     const output = sum(records, r => recordOutput(r).weightKg);
@@ -1027,12 +1148,38 @@
     return state.production.filter(r => (!from || r.date >= from) && (!to || r.date <= to));
   }
 
+  function engineerCurrentWeekRecords() {
+    const { from, today } = currentWeekRange();
+    return state.production.filter(record => record.createdBy === currentUser?.id && record.date >= from && record.date <= today);
+  }
+
   function renderReports() {
+    applyRoleScopedUI();
     renderWeeklyReport();
-    renderReconciliation();
+    if (currentRole !== 'engineer') renderReconciliation();
   }
 
   function renderWeeklyReport() {
+    if (currentRole === 'engineer') {
+      renderEngineerWeeklyReport();
+      return;
+    }
+    renderManagementWeeklyReport();
+  }
+
+  function renderEngineerWeeklyReport() {
+    const { from, to } = currentWeekRange();
+    els.reportFrom.value = from;
+    els.reportTo.value = to;
+    const records = engineerCurrentWeekRecords();
+    $('#engineerReportProductionWeight').textContent = num(sum(records, r => recordOutput(r).weightKg), 2);
+    $('#engineerReportPallets').textContent = num(sum(records, r => r.pallets));
+    $('#engineerReportPrintedNylonWeight').textContent = num(sum(records, r => r.printedNylonWeight), 2);
+    $('#engineerReportPrintedNylonRolls').textContent = num(sum(records, r => r.printedNylonRolls));
+    $('#engineerReportPeriodLabel').textContent = `الأسبوع الحالي — من السبت ${formatDate(from)} إلى الجمعة ${formatDate(to)}`;
+  }
+
+  function renderManagementWeeklyReport() {
     const from = els.reportFrom.value;
     const to = els.reportTo.value;
     const records = recordsInRange(from,to);
@@ -1090,6 +1237,7 @@
   }
 
   function renderReconciliation() {
+    if (currentRole === 'engineer') return;
     const month = els.reconcileMonth.value || isoToday().slice(0,7);
     if (!els.reconcileMonth.value) els.reconcileMonth.value = month;
     const {from,to} = monthRange(month);
@@ -1111,13 +1259,25 @@
 
   function renderRecords() {
     const query = ($('#recordSearch')?.value || '').trim().toLowerCase();
+    const selectedDate = currentRole === 'engineer' ? '' : (els.recordDateFilter?.value || '');
+    const { from: weekFrom, today } = currentWeekRange();
     const profileNames = new Map(state.profiles.map(p => [p.id, p.full_name || p.username || '—']));
     if (currentUser?.id) profileNames.set(currentUser.id, currentUser.profile?.full_name || currentUser.profile?.username || 'المستخدم الحالي');
-    const rows = [...state.production].sort((a,b) => b.date.localeCompare(a.date)).filter(r => {
+    if (els.recordsScopeNote) {
+      els.recordsScopeNote.textContent = currentRole === 'engineer'
+        ? `سجلات الأسبوع الحالي — من السبت ${formatDate(weekFrom)} حتى اليوم ${formatDate(today)}`
+        : selectedDate
+          ? `سجلات يوم ${formatDate(selectedDate)} فقط`
+          : 'جميع سجلات الإنتاج دون قيد أسبوعي';
+    }
+    if (els.clearRecordDateFilter) els.clearRecordDateFilter.disabled = !selectedDate;
+    const rows = [...state.production].filter(r => {
+      if (currentRole === 'engineer' && (r.date < weekFrom || r.date > today || r.createdBy !== currentUser?.id)) return false;
+      if (selectedDate && r.date !== selectedDate) return false;
       const p = getProduct(r.productId) || r.productSnapshot || { name: '' };
       const hay = [r.date, p.name, r.shift, ...(r.rolls||[]).map(x=>x.code)].join(' ').toLowerCase();
       return !query || hay.includes(query);
-    });
+    }).sort((a,b) => b.date.localeCompare(a.date));
     $('#recordsTable').innerHTML = rows.length ? rows.map(r => {
       const p = getProduct(r.productId) || r.productSnapshot || { name: 'صنف محذوف' };
       const output = recordOutput(r);
@@ -1126,8 +1286,8 @@
       const creator = profileNames.get(r.createdBy) || r.createdBy || '—';
       const updater = profileNames.get(r.updatedBy) || r.updatedBy || '';
       const updatedMeta = r.updatedBy ? `<span>آخر تعديل بواسطة: ${escapeHtml(updater)}</span><span>آخر تعديل: ${formatTimestamp(r.updatedAt)}</span>` : '';
-      const canEdit = (can('production','update') || can('records','update')) && can('production','view') && (['owner', 'admin'].includes(currentRole) || r.createdBy === currentUser?.id);
-      const canDelete = can('production','delete') || can('records','delete');
+      const canEdit = (can('production','update') || can('records','update')) && (can('production') || can('records')) && (['owner', 'admin'].includes(currentRole) || r.createdBy === currentUser?.id);
+      const canDelete = currentRole !== 'engineer' && (can('production','delete') || can('records','delete'));
       const actions = `<div class="action-cell">${canEdit ? `<button class="icon-btn" data-edit-production="${r.id}">تعديل</button>` : ''}${canDelete ? `<button class="danger-btn" data-delete-production="${r.id}">حذف</button>` : ''}</div>`;
       return `<tr><td>${formatDate(r.date)}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(r.shift)}</td><td>${escapeHtml(rollText || '—')}</td><td>${num(recordRawWeight(r),2)} كغم</td><td>${num(r.pallets)}</td><td>${num(output.weightKg,2)} كغم</td><td>${num(r.transparentNylonWeight || 0,2)} كغم</td><td>${printedNylonText}</td><td>${num(r.wasteWeight,2)} كغم</td><td><div class="record-meta"><span>أُضيف بواسطة: ${escapeHtml(creator)}</span><span>تاريخ الإضافة: ${formatTimestamp(r.createdAt)}</span>${updatedMeta}</div>${actions}</td></tr>`;
     }).join('') : `<tr><td colspan="11"><div class="empty-state">لا توجد سجلات.</div></td></tr>`;
@@ -1165,9 +1325,14 @@
     els.permissionsBody.innerHTML = Object.entries(PAGE_ACTIONS).map(([page, supported]) => `<tr><th>${PAGE_NAMES[page]}</th>${actions.map(action => {
       if (!supported.includes(action)) return '<td><span class="permission-na">—</span></td>';
       const ownerManagedAction = page === 'users' && action !== 'view' && !ownerLocked;
-      const checked = ownerLocked || (!ownerManagedAction && can(page, action, user.id, user.role));
-      const locked = ownerLocked || ownerManagedAction;
-      const lockTitle = ownerManagedAction ? 'إضافة المستخدمين وتعديلهم تبقى للمالك فقط' : '';
+      const engineerDeleteLocked = user.role === 'engineer' && action === 'delete' && ['production', 'records'].includes(page);
+      const checked = ownerLocked || (!ownerManagedAction && !engineerDeleteLocked && can(page, action, user.id, user.role));
+      const locked = ownerLocked || ownerManagedAction || engineerDeleteLocked;
+      const lockTitle = ownerManagedAction
+        ? 'إضافة المستخدمين وتعديلهم تبقى للمالك فقط'
+        : engineerDeleteLocked
+          ? 'حذف سجلات الإنتاج ممنوع دائمًا للمهندس'
+          : '';
       return `<td><label class="permission-check" title="${lockTitle}"><input type="checkbox" data-permission-page="${page}" data-permission-action="${action}" ${checked ? 'checked' : ''} ${locked ? 'disabled' : ''} /><span>${ACTION_NAMES[action]}</span></label></td>`;
     }).join('')}</tr>`).join('');
     $('#savePermissionsBtn').disabled = ownerLocked;
@@ -1281,12 +1446,25 @@
     renderProducts();
     renderReports();
     renderRecords();
-    if (can('users')) renderUsers();
-    if (can('activity')) renderAuditLog();
+    renderUsers();
+    renderAuditLog();
   }
 
   function exportWeeklyCsv() {
     if (!can('reports', 'export')) return toast('لا تملك صلاحية تصدير التقارير.');
+    if (currentRole === 'engineer') {
+      const { from, to } = currentWeekRange();
+      const records = engineerCurrentWeekRecords();
+      const rows = [
+        ['الفترة', `من ${from} إلى ${to}`],
+        ['عدد المشاتيح المنتجة', sum(records, r => r.pallets)],
+        ['وزن الإنتاج بالكغم', round2(sum(records, r => recordOutput(r).weightKg))],
+        ['النايلون المطبوع بالكغم', round2(sum(records, r => r.printedNylonWeight))],
+        ['عدد رولات النايلون المطبوع', sum(records, r => r.printedNylonRolls)]
+      ];
+      downloadCsv(`salima-engineer-week-${from}-${to}.csv`, [['البند', 'القيمة'], ...rows]);
+      return;
+    }
     const records = recordsInRange(els.reportFrom.value, els.reportTo.value);
     const headers = ['التاريخ','الصنف','الوردية','أكواد الرولات','وزن الرولات كغم','المشاتيح','الشوالات','الحبات','الحبات الصغيرة','وزن الإنتاج كغم','نايلون شفاف كغم','نايلون مطبوع كغم','نايلون مطبوع عدد الرولات','التوالف كغم'];
     const rows = records.sort((a,b)=>a.date.localeCompare(b.date)).map(r => {
@@ -1335,8 +1513,8 @@
     els.palletsProduced.addEventListener('input', updateProductionCalculation);
     els.extraBags.addEventListener('input', updateProductionCalculation);
     els.productionForm.addEventListener('submit', saveProduction);
-    $('#clearProductionForm').addEventListener('click', resetProductionForm);
-    els.cancelProductionEdit.addEventListener('click', resetProductionForm);
+    $('#clearProductionForm').addEventListener('click', clearProductionFormAndRestoreView);
+    els.cancelProductionEdit.addEventListener('click', clearProductionFormAndRestoreView);
 
     els.shipmentForm.addEventListener('submit', saveShipment);
     els.cancelShipmentEdit.addEventListener('click', resetShipmentForm);
@@ -1348,16 +1526,24 @@
     els.cancelProductEdit.addEventListener('click', () => { resetProductForm(); els.productFormPanel.classList.add('hidden'); });
 
     $('#setCurrentWeek').addEventListener('click', () => {
-      els.reportFrom.value = dateToIso(startOfWeek());
-      els.reportTo.value = dateToIso(endOfWeek());
+      const { from, to } = currentWeekRange();
+      els.reportFrom.value = from;
+      els.reportTo.value = to;
       renderWeeklyReport();
     });
     $('#refreshReport').addEventListener('click', renderWeeklyReport);
     els.reconcileMonth.addEventListener('change', renderReconciliation);
     $('#exportWeeklyCsv').addEventListener('click', exportWeeklyCsv);
     $('#printWeeklyReport').addEventListener('click', () => can('reports', 'print') ? window.print() : toast('لا تملك صلاحية طباعة التقارير.'));
+    $('#exportEngineerWeeklyCsv')?.addEventListener('click', exportWeeklyCsv);
+    $('#printEngineerWeeklyReport')?.addEventListener('click', () => can('reports', 'print') ? window.print() : toast('لا تملك صلاحية طباعة التقارير.'));
 
     $('#recordSearch').addEventListener('input', renderRecords);
+    els.recordDateFilter?.addEventListener('change', renderRecords);
+    els.clearRecordDateFilter?.addEventListener('click', () => {
+      els.recordDateFilter.value = '';
+      renderRecords();
+    });
     $('#exportBackup').addEventListener('click', exportBackup);
     els.userForm.addEventListener('submit', createUserAccount);
     $('#resetPermissionDefaults').addEventListener('click', setPermissionCheckboxesToDefaults);
@@ -1371,8 +1557,9 @@
     els.todayLabel.textContent = new Intl.DateTimeFormat('ar-PS', {weekday:'long', day:'2-digit', month:'long', year:'numeric'}).format(new Date(`${today}T12:00:00`));
     els.prodDate.value = today;
     els.shipmentDate.value = today;
-    els.reportFrom.value = dateToIso(startOfWeek());
-    els.reportTo.value = dateToIso(endOfWeek());
+    const { from, to } = currentWeekRange();
+    els.reportFrom.value = from;
+    els.reportTo.value = to;
     els.reconcileMonth.value = today.slice(0,7);
   }
 
