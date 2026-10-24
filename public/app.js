@@ -4,12 +4,6 @@
   const CACHE_KEY = 'salimaFactoryCloudCacheV4';
   const THEME_KEY = 'salimaFactoryTheme';
   const DATA_PAGE_SIZE = 500;
-  const DEFAULT_PRODUCTS = [
-    { id: 'mona', name: 'محارم المنى 1.2 كغم', bagsPerPallet: 27, packsPerBag: 10, unitsPerPack: 6, unitWeightKg: 0.2 },
-    { id: 'maram', name: 'محارم المرام 1 كغم', bagsPerPallet: 30, packsPerBag: 10, unitsPerPack: 5, unitWeightKg: 0.2 },
-    { id: 'rania', name: 'محارم رانيا 1 كغم', bagsPerPallet: 40, packsPerBag: 10, unitsPerPack: 4, unitWeightKg: 0.25 },
-    { id: 'hana', name: 'محارم الهنا 1 كغم', bagsPerPallet: 30, packsPerBag: 10, unitsPerPack: 5, unitWeightKg: 0.2 }
-  ];
 
   const PAGE_ACTIONS = {
     dashboard: ['view'],
@@ -26,7 +20,7 @@
   const ACTION_NAMES = { view: 'عرض', create: 'إضافة', update: 'تعديل', delete: 'حذف', export: 'تصدير', print: 'طباعة' };
 
   const seed = {
-    products: DEFAULT_PRODUCTS,
+    products: [],
     shipments: [],
     production: [],
     profiles: [],
@@ -40,6 +34,7 @@
   let currentUser = null;
   let db = null;
   let currentProductionEditId = null;
+  let factoryCalendar = null;
   let toastTimer = null;
   let presenceTimer = null;
   let lastProfileCheckAt = 0;
@@ -66,16 +61,14 @@
     prodDate: $('#prodDate'),
     prodShift: $('#prodShift'),
     prodProduct: $('#prodProduct'),
+    productionProductsEmpty: $('#productionProductsEmpty'),
     productionRollRows: $('#productionRollRows'),
     totalUsedWeight: $('#totalUsedWeight'),
     palletsProduced: $('#palletsProduced'),
     extraBags: $('#extraBags'),
-    transparentNylonWeight: $('#transparentNylonWeight'),
-    printedNylonMode: $('#printedNylonMode'),
-    printedNylonWeight: $('#printedNylonWeight'),
-    printedNylonRolls: $('#printedNylonRolls'),
-    printedNylonWeightWrap: $('#printedNylonWeightWrap'),
-    printedNylonRollsWrap: $('#printedNylonRollsWrap'),
+    transparentNylonRows: $('#transparentNylonRows'),
+    printedNylonRows: $('#printedNylonRows'),
+    factoryCalendarWarning: $('#factoryCalendarWarning'),
     wasteWeight: $('#wasteWeight'),
     wasteType: $('#wasteType'),
     prodNotes: $('#prodNotes'),
@@ -177,7 +170,15 @@
     return { id: row.id, date: row.shipment_date, supplier: row.supplier || '', containerCount: Number(row.container_count), rollCount: Number(row.roll_count), totalWeight: Number(row.total_weight), ref: row.reference || '', notes: row.notes || '', createdBy: row.created_by, updatedBy: row.updated_by, updatedAt: row.updated_at };
   }
   function mapProduction(row) {
-    return { id: row.id, date: row.production_date, shift: row.shift, productId: row.product_id, productSnapshot: row.product_snapshot || null, rolls: Array.isArray(row.rolls) ? row.rolls : [], pallets: Number(row.pallets || 0), extraBags: Number(row.extra_bags || 0), transparentNylonWeight: Number(row.transparent_nylon_weight || 0), printedNylonMode: row.printed_nylon_mode || 'weight', printedNylonWeight: Number(row.printed_nylon_weight || 0), printedNylonRolls: Number(row.printed_nylon_rolls || 0), wasteWeight: Number(row.waste_weight || 0), wasteType: row.waste_type || 'لا يوجد', notes: row.notes || '', createdBy: row.created_by, updatedBy: row.updated_by, createdAt: row.created_at, updatedAt: row.updated_at };
+    const transparentItems = Array.isArray(row.transparent_nylon_items)
+      ? row.transparent_nylon_items
+      : (Number(row.transparent_nylon_weight || 0) > 0 ? [{ name: 'شفاف سابق', weight_kg: Number(row.transparent_nylon_weight), quantity: 0 }] : []);
+    const printedItems = Array.isArray(row.printed_nylon_items)
+      ? row.printed_nylon_items
+      : ((Number(row.printed_nylon_weight || 0) > 0 || Number(row.printed_nylon_rolls || 0) > 0)
+          ? [{ name: 'مطبوع سابق', weight_kg: Number(row.printed_nylon_weight || 0), quantity: Number(row.printed_nylon_rolls || 0) }]
+          : []);
+    return { id: row.id, date: row.production_date, shift: row.shift, productId: row.product_id, productSnapshot: row.product_snapshot || null, rolls: Array.isArray(row.rolls) ? row.rolls : [], pallets: Number(row.pallets || 0), extraBags: Number(row.extra_bags || 0), transparentNylonItems: normalizeNylonItems(transparentItems), printedNylonItems: normalizeNylonItems(printedItems), wasteWeight: Number(row.waste_weight || 0), wasteType: row.waste_type || '', notes: row.notes || '', createdBy: row.created_by, updatedBy: row.updated_by, createdAt: row.created_at, updatedAt: row.updated_at };
   }
 
   function roleDefault(role, page, action) {
@@ -280,8 +281,11 @@
     state.permissions = permissionResult.data || [];
     const queries = [];
     const slots = {};
-    if (can('production') || can('records') || can('reports') || can('dashboard')) {
+    const needsProductionData = can('production') || can('records') || can('reports') || can('dashboard');
+    if (can('products') || needsProductionData) {
       slots.products = queries.length; queries.push(db.from('products').select('*').eq('is_active', true).order('name'));
+    }
+    if (needsProductionData) {
       slots.production = queries.length;
       queries.push(fetchAllRows(() => {
         let query = db.from('production_records').select('*');
@@ -328,6 +332,16 @@
     saveState();
   }
 
+  async function loadFactoryCalendar() {
+    const { data, error } = await db.rpc('get_factory_calendar');
+    if (error) throw error;
+    const value = Array.isArray(data) ? data[0] : data;
+    if (!value?.today || !value?.week_start || !value?.week_end) throw new Error('Invalid factory calendar response');
+    factoryCalendar = { today: value.today, from: value.week_start, to: value.week_end };
+    els.factoryCalendarWarning?.classList.add('hidden');
+    initDates();
+  }
+
   async function getMyProfile(user) {
     const { data, error } = await db.from('profiles').select('id,username,full_name,role,is_active').eq('id', user.id).single();
     if (error) throw error;
@@ -345,6 +359,13 @@
       }
       currentUser = { ...session.user, profile };
       setRole(profile.role);
+      try {
+        await loadFactoryCalendar();
+      } catch (calendarError) {
+        factoryCalendar = null;
+        els.factoryCalendarWarning?.classList.remove('hidden');
+        console.warn('Factory calendar unavailable', calendarError?.message || calendarError);
+      }
       els.userTitle.textContent = profile.full_name || (profile.role === 'owner' ? 'مالك النظام' : profile.role === 'admin' ? 'مدير المصنع' : 'مهندس الإنتاج');
       els.authScreen.classList.add('hidden');
       els.appShell.classList.remove('hidden');
@@ -361,7 +382,7 @@
   }
 
   function showLogin() {
-    currentUser = null; currentRole = null; state = cloneSeed();
+    currentUser = null; currentRole = null; factoryCalendar = null; state = cloneSeed();
     els.appShell.classList.add('hidden');
     els.authScreen.classList.remove('hidden');
     if (presenceTimer) clearInterval(presenceTimer);
@@ -469,7 +490,7 @@
     const { error } = await db.from('shipments').upsert(payload); if (error) throw error;
   }
   async function dbUpsertProduction(record) {
-    const payload = { production_date: record.date, shift: record.shift, product_id: record.productId, product_snapshot: record.productSnapshot, rolls: record.rolls, pallets: record.pallets, extra_bags: record.extraBags, transparent_nylon_weight: record.transparentNylonWeight, printed_nylon_mode: record.printedNylonMode, printed_nylon_weight: record.printedNylonWeight, printed_nylon_rolls: record.printedNylonRolls, waste_weight: record.wasteWeight, waste_type: record.wasteType, notes: record.notes };
+    const payload = { production_date: record.date, shift: record.shift, product_id: record.productId, product_snapshot: record.productSnapshot, rolls: record.rolls, pallets: record.pallets, extra_bags: record.extraBags, transparent_nylon_items: record.transparentNylonItems, printed_nylon_items: record.printedNylonItems, waste_weight: record.wasteWeight, waste_type: record.wasteType || null, notes: record.notes };
     const query = record.isUpdate
       ? db.from('production_records').update(payload).eq('id', record.id)
       : db.from('production_records').insert({ id: record.id, ...payload });
@@ -491,18 +512,10 @@
     applyTheme(document.documentElement.dataset.theme === 'night' ? 'day' : 'night');
   }
 
-  function updatePrintedNylonMode() {
-    const byWeight = els.printedNylonMode.value === 'weight';
-    const strict = currentRole === 'engineer';
-    els.printedNylonWeightWrap.classList.toggle('hidden', !byWeight);
-    els.printedNylonRollsWrap.classList.toggle('hidden', byWeight);
-    els.printedNylonWeight.required = strict && byWeight;
-    els.printedNylonRolls.required = strict && !byWeight;
-  }
-
   function uid() { return crypto.randomUUID(); }
 
   function isoToday() {
+    if (factoryCalendar?.today) return factoryCalendar.today;
     return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Hebron', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   }
 
@@ -519,6 +532,43 @@
 
   function round2(n) { return Math.round((Number(n) + Number.EPSILON) * 100) / 100; }
   function sum(arr, fn) { return arr.reduce((acc, x) => acc + Number(fn(x) || 0), 0); }
+
+  function normalizeNylonItems(items) {
+    return (Array.isArray(items) ? items : []).map(item => ({
+      name: String(item?.name ?? item?.type ?? '').trim(),
+      weight_kg: Number(item?.weight_kg || 0),
+      quantity: Number(item?.quantity || 0)
+    }));
+  }
+
+  function transparentNylonTotalWeight(record) { return round2(sum(normalizeNylonItems(record?.transparentNylonItems), item => item.weight_kg)); }
+  function transparentNylonTotalQuantity(record) { return sum(normalizeNylonItems(record?.transparentNylonItems), item => item.quantity); }
+  function printedNylonTotalWeight(record) { return round2(sum(normalizeNylonItems(record?.printedNylonItems), item => item.weight_kg)); }
+  function printedNylonTotalQuantity(record) { return sum(normalizeNylonItems(record?.printedNylonItems), item => item.quantity); }
+
+  function nylonDetails(items) {
+    return normalizeNylonItems(items).map(item => `${item.name}: ${num(item.weight_kg, 2)} كغم × ${num(item.quantity)}`).join(' | ');
+  }
+
+  function nylonBreakdown(records, key) {
+    const grouped = new Map();
+    records.flatMap(record => normalizeNylonItems(record[key])).forEach(item => {
+      const name = item.name || 'غير مسمى';
+      const current = grouped.get(name) || { weight: 0, quantity: 0 };
+      current.weight += item.weight_kg;
+      current.quantity += item.quantity;
+      grouped.set(name, current);
+    });
+    return grouped;
+  }
+
+  function renderNylonBreakdown(target, grouped) {
+    const element = $(target);
+    if (!element) return;
+    element.innerHTML = grouped.size
+      ? Array.from(grouped.entries()).map(([name, totals]) => `<div class="nylon-breakdown-row"><strong>${escapeHtml(name)}</strong><span>${num(totals.weight, 2)} كغم / ${num(totals.quantity)} حبة</span></div>`).join('')
+      : '<span class="muted">لا توجد بيانات.</span>';
+  }
 
   function toast(message) {
     els.toast.textContent = message;
@@ -547,6 +597,7 @@
   }
 
   function currentWeekRange() {
+    if (factoryCalendar) return { ...factoryCalendar };
     const today = isoToday();
     const todayAtNoon = new Date(`${today}T12:00:00`);
     return {
@@ -565,6 +616,27 @@
 
   function getProduct(id) { return state.products.find(p => p.id === id); }
 
+  function isProductDefinition(product) {
+    return Boolean(product
+      && String(product.name || '').trim()
+      && ['bagsPerPallet', 'packsPerBag', 'unitsPerPack', 'unitWeightKg']
+        .every(key => Number.isFinite(Number(product[key])) && Number(product[key]) > 0));
+  }
+
+  function recordProduct(record) {
+    if (isProductDefinition(record?.productSnapshot)) return record.productSnapshot;
+    const current = getProduct(record?.productId);
+    return isProductDefinition(current) ? current : null;
+  }
+
+  function productionFormProduct() {
+    const selectedId = els.prodProduct.value;
+    const existing = state.production.find(record => record.id === currentProductionEditId);
+    if (existing && existing.productId === selectedId) return recordProduct(existing);
+    const current = getProduct(selectedId);
+    return isProductDefinition(current) ? current : null;
+  }
+
   function calculateOutput(product, pallets, extraBags) {
     if (!product) return { pallets: 0, bags: 0, packs: 0, units: 0, weightKg: 0 };
     const p = Math.max(0, Number(pallets || 0));
@@ -581,8 +653,7 @@
   }
 
   function recordOutput(record) {
-    const product = getProduct(record.productId) || record.productSnapshot;
-    return calculateOutput(product, record.pallets, record.extraBags);
+    return calculateOutput(recordProduct(record), record.pallets, record.extraBags);
   }
 
   function navigate(view) {
@@ -618,16 +689,31 @@
 
   function updateProductionRequiredState() {
     const strict = currentRole === 'engineer';
-    [els.palletsProduced, els.extraBags, els.transparentNylonWeight, els.wasteWeight, els.wasteType, els.prodNotes]
+    [els.palletsProduced, els.extraBags, els.wasteWeight, els.prodNotes]
       .forEach(field => { field.required = strict; });
     $$('.roll-code, .roll-weight', els.productionRollRows).forEach(field => { field.required = strict; });
-    updatePrintedNylonMode();
   }
 
   function renderProductOptions() {
     const selected = els.prodProduct.value;
-    els.prodProduct.innerHTML = state.products.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('');
-    if (state.products.some(p => p.id === selected)) els.prodProduct.value = selected;
+    const existing = state.production.find(record => record.id === currentProductionEditId);
+    const historicalProduct = existing ? recordProduct(existing) : null;
+    const options = state.products.map(product => {
+      const displayProduct = existing?.productId === product.id && historicalProduct ? historicalProduct : product;
+      const suffix = existing?.productId === product.id && historicalProduct ? ' (كما حُفظ في السجل)' : '';
+      return `<option value="${escapeHtml(product.id)}">${escapeHtml(displayProduct.name + suffix)}</option>`;
+    });
+    if (existing && historicalProduct && !state.products.some(product => product.id === existing.productId)) {
+      options.unshift(`<option value="${escapeHtml(existing.productId)}">${escapeHtml(`${historicalProduct.name} (صنف تاريخي)`)}</option>`);
+    }
+    if (!options.length) options.push('<option value="">لا توجد أصناف مضافة</option>');
+    els.prodProduct.innerHTML = options.join('');
+    const preferred = existing?.productId || selected;
+    if (Array.from(els.prodProduct.options).some(option => option.value === preferred)) els.prodProduct.value = preferred;
+    const hasProduct = Boolean(productionFormProduct());
+    els.prodProduct.disabled = !hasProduct;
+    els.saveProductionBtn.disabled = !hasProduct;
+    els.productionProductsEmpty?.classList.toggle('hidden', hasProduct);
     updateProductionCalculation();
   }
 
@@ -649,6 +735,36 @@
     if (!els.productionRollRows.children.length) addProductionRollRow();
   }
 
+  function addNylonItemRow(kind, data = {}) {
+    const tbody = kind === 'transparent' ? els.transparentNylonRows : els.printedNylonRows;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td><input class="nylon-item-name" type="text" placeholder="الاسم / النوع" value="${escapeAttr(data.name || data.type || '')}" /></td><td><input class="nylon-item-weight" type="number" min="0" step="0.01" placeholder="0" value="${data.weight_kg ?? ''}" /></td><td><input class="nylon-item-quantity" type="number" min="0" step="1" placeholder="0" value="${data.quantity ?? ''}" /></td><td><button type="button" class="remove-row" aria-label="حذف السطر">✕</button></td>`;
+    $('.remove-row', tr).addEventListener('click', () => tr.remove());
+    tbody.appendChild(tr);
+  }
+
+  function readNylonItemRows(kind) {
+    const tbody = kind === 'transparent' ? els.transparentNylonRows : els.printedNylonRows;
+    const label = kind === 'transparent' ? 'النايلون الشفاف' : 'النايلون المطبوع';
+    const items = [];
+    for (const row of $$('tr', tbody)) {
+      const nameField = $('.nylon-item-name', row);
+      const weightField = $('.nylon-item-weight', row);
+      const quantityField = $('.nylon-item-quantity', row);
+      const name = nameField.value.trim();
+      const weightRaw = weightField.value.trim();
+      const quantityRaw = quantityField.value.trim();
+      if (!name && !weightRaw && !quantityRaw) continue;
+      if (!name) return productionError(`يرجى إدخال اسم / نوع ${label}`, nameField);
+      const weight = weightRaw === '' ? 0 : Number(weightRaw);
+      const quantity = quantityRaw === '' ? 0 : Number(quantityRaw);
+      if (!Number.isFinite(weight) || weight < 0) return productionError(`يرجى إدخال وزن صحيح في ${label}`, weightField);
+      if (!Number.isFinite(quantity) || quantity < 0 || !Number.isInteger(quantity)) return productionError(`يرجى إدخال عدد صحيح غير سالب في ${label}`, quantityField);
+      items.push({ name, weight_kg: weight, quantity });
+    }
+    return items;
+  }
+
   function getProductionRollRows() {
     return $$('tr', els.productionRollRows).map(tr => ({
       code: $('.roll-code', tr).value.trim(),
@@ -663,7 +779,7 @@
   }
 
   function updateProductionCalculation() {
-    const product = getProduct(els.prodProduct.value);
+    const product = productionFormProduct();
     const calc = calculateOutput(product, els.palletsProduced.value, els.extraBags.value);
     const card = $('#packagingPreview');
     $('[data-calc="pallets"]', card).textContent = num(calc.pallets);
@@ -682,16 +798,13 @@
   function resetProductionForm() {
     currentProductionEditId = null;
     els.productionForm.reset();
-    els.prodDate.value = isoToday();
+    els.prodDate.value = factoryCalendar?.today || isoToday();
     els.extraBags.value = '';
-    els.transparentNylonWeight.value = '';
-    els.printedNylonMode.value = 'weight';
-    els.printedNylonWeight.value = '';
-    els.printedNylonRolls.value = '';
+    els.transparentNylonRows.innerHTML = '';
+    els.printedNylonRows.innerHTML = '';
     els.wasteWeight.value = '';
-    els.wasteType.value = 'لا يوجد';
+    els.wasteType.value = '';
     els.prodNotes.value = '';
-    updatePrintedNylonMode();
     els.productionRollRows.innerHTML = '';
     addProductionRollRow();
     els.productionFormTitle.textContent = 'تسجيل الإنتاج اليومي';
@@ -751,9 +864,18 @@
     const strict = currentRole === 'engineer';
 
     if (!els.prodDate.value) return productionError('يرجى اختيار تاريخ الإنتاج', els.prodDate);
+    if (currentRole === 'engineer' && factoryCalendar
+      && (els.prodDate.value < factoryCalendar.from || els.prodDate.value > factoryCalendar.today)) {
+      return productionError('تاريخ المهندس يجب أن يكون ضمن الأسبوع الحالي وحتى تاريخ المصنع اليوم', els.prodDate);
+    }
     if (!els.prodShift.value.trim()) return productionError('يرجى اختيار الوردية', els.prodShift);
-    const product = getProduct(els.prodProduct.value);
-    if (!product) return productionError('يرجى اختيار المنتج', els.prodProduct);
+    const product = productionFormProduct();
+    if (!product) {
+      const message = state.products.length || currentProductionEditId
+        ? 'يرجى اختيار الصنف'
+        : 'لا يمكن حفظ الإنتاج قبل إضافة صنف';
+      return productionError(message, els.prodProduct);
+    }
 
     const rows = $$('tr', els.productionRollRows);
     const rolls = [];
@@ -789,9 +911,6 @@
 
     let pallets;
     let extraBags;
-    let transparentNylonWeight;
-    let printedNylonWeight = 0;
-    let printedNylonRolls = 0;
     let wasteWeight;
 
     if (strict) {
@@ -799,48 +918,36 @@
       if (pallets === null) return null;
       extraBags = requiredNumber(els.extraBags, 'الأكياس الإضافية', { integer: true });
       if (extraBags === null) return null;
-      transparentNylonWeight = requiredNumber(els.transparentNylonWeight, 'وزن النايلون الشفاف');
-      if (transparentNylonWeight === null) return null;
     } else {
       pallets = optionalNumber(els.palletsProduced, 'عدد المشاتيح', { integer: true });
       if (pallets === null) return null;
       extraBags = optionalNumber(els.extraBags, 'الأكياس الإضافية', { integer: true });
       if (extraBags === null) return null;
-      transparentNylonWeight = optionalNumber(els.transparentNylonWeight, 'وزن النايلون الشفاف');
-      if (transparentNylonWeight === null) return null;
     }
 
-    const printedNylonMode = ['weight', 'rolls'].includes(els.printedNylonMode.value) ? els.printedNylonMode.value : 'weight';
-    if (printedNylonMode === 'weight') {
-      printedNylonWeight = strict
-        ? requiredNumber(els.printedNylonWeight, 'وزن النايلون المطبوع')
-        : optionalNumber(els.printedNylonWeight, 'وزن النايلون المطبوع');
-      if (printedNylonWeight === null) return null;
-    } else {
-      printedNylonRolls = strict
-        ? requiredNumber(els.printedNylonRolls, 'عدد رولات النايلون المطبوع', { integer: true })
-        : optionalNumber(els.printedNylonRolls, 'عدد رولات النايلون المطبوع', { integer: true });
-      if (printedNylonRolls === null) return null;
-    }
+    const transparentNylonItems = readNylonItemRows('transparent');
+    if (transparentNylonItems === null) return null;
+    const printedNylonItems = readNylonItemRows('printed');
+    if (printedNylonItems === null) return null;
 
     wasteWeight = strict
       ? requiredNumber(els.wasteWeight, 'وزن التوالف')
       : optionalNumber(els.wasteWeight, 'وزن التوالف');
     if (wasteWeight === null) return null;
 
-    if (strict && wasteWeight > 0 && (!els.wasteType.value.trim() || els.wasteType.value === 'لا يوجد')) {
-      return productionError('يرجى اختيار نوع التوالف', els.wasteType);
+    if (wasteWeight > 0 && !els.wasteType.value.trim()) {
+      return productionError('يرجى كتابة نوع / وصف التالف', els.wasteType);
     }
 
-    const wasteType = wasteWeight === 0 ? 'لا يوجد' : (els.wasteType.value.trim() || 'لا يوجد');
-    if (wasteWeight === 0) els.wasteType.value = 'لا يوجد';
+    const wasteType = wasteWeight === 0 ? '' : els.wasteType.value.trim();
+    if (wasteWeight === 0) els.wasteType.value = '';
 
     const notes = els.prodNotes.value.trim();
     if (strict && !notes) return productionError('يرجى تعبئة الملاحظات، أو كتابة «لا يوجد»', els.prodNotes);
 
     return {
-      product, rolls, pallets, extraBags, transparentNylonWeight, printedNylonMode,
-      printedNylonWeight, printedNylonRolls, wasteWeight, wasteType, notes
+      product, rolls, pallets, extraBags, transparentNylonItems, printedNylonItems,
+      wasteWeight, wasteType, notes
     };
   }
 
@@ -861,15 +968,18 @@
     const valid = validateProductionForm();
     if (!valid) return;
     const isUpdate = Boolean(currentProductionEditId);
+    const existing = state.production.find(r => r.id === currentProductionEditId);
+    const selectedProductId = els.prodProduct.value;
+    const productSnapshot = existing && existing.productId === selectedProductId
+      ? clone(existing.productSnapshot ?? {})
+      : clone(valid.product);
     if (currentRole === 'engineer' && !(await confirmEngineerSave())) return;
     const record = {
-      id: currentProductionEditId || uid(), isUpdate, date: els.prodDate.value, shift: els.prodShift.value, productId: valid.product.id, productSnapshot: clone(valid.product), rolls: valid.rolls,
-      pallets: valid.pallets, extraBags: valid.extraBags, transparentNylonWeight: valid.transparentNylonWeight,
-      printedNylonMode: valid.printedNylonMode, printedNylonWeight: valid.printedNylonWeight,
-      printedNylonRolls: valid.printedNylonRolls, wasteWeight: valid.wasteWeight,
+      id: currentProductionEditId || uid(), isUpdate, date: els.prodDate.value, shift: els.prodShift.value, productId: selectedProductId, productSnapshot, rolls: valid.rolls,
+      pallets: valid.pallets, extraBags: valid.extraBags, transparentNylonItems: valid.transparentNylonItems,
+      printedNylonItems: valid.printedNylonItems, wasteWeight: valid.wasteWeight,
       wasteType: valid.wasteType, notes: valid.notes
     };
-    const existing = state.production.find(r => r.id === record.id);
     try {
       els.saveProductionBtn.disabled = true;
       await dbUpsertProduction(record);
@@ -877,7 +987,7 @@
       toast(existing ? 'تم تحديث سجل الإنتاج.' : 'تم حفظ إنتاج اليوم في قاعدة البيانات.');
       resetProductionForm(); renderAll(); navigate('dashboard');
     } catch (error) { console.error(error); toast(`تعذر الحفظ: ${error.message || error}`); }
-    finally { els.saveProductionBtn.disabled = false; }
+    finally { els.saveProductionBtn.disabled = !productionFormProduct(); }
   }
 
   function editProduction(id) {
@@ -904,13 +1014,12 @@
     ensureProductionRow();
     els.palletsProduced.value = r.pallets;
     els.extraBags.value = r.extraBags || 0;
-    els.transparentNylonWeight.value = r.transparentNylonWeight || 0;
-    els.printedNylonMode.value = r.printedNylonMode || (Number(r.printedNylonRolls || 0) > 0 ? 'rolls' : 'weight');
-    els.printedNylonWeight.value = r.printedNylonWeight || 0;
-    els.printedNylonRolls.value = r.printedNylonRolls || 0;
-    updatePrintedNylonMode();
+    els.transparentNylonRows.innerHTML = '';
+    els.printedNylonRows.innerHTML = '';
+    (r.transparentNylonItems || []).forEach(item => addNylonItemRow('transparent', item));
+    (r.printedNylonItems || []).forEach(item => addNylonItemRow('printed', item));
     els.wasteWeight.value = r.wasteWeight || 0;
-    els.wasteType.value = r.wasteType || 'قص وتعديل';
+    els.wasteType.value = r.wasteType || '';
     els.prodNotes.value = r.notes || '';
     els.productionFormTitle.textContent = 'تعديل سجل الإنتاج';
     els.saveProductionBtn.textContent = 'حفظ التعديل';
@@ -977,7 +1086,6 @@
   function resetProductForm() {
     els.productForm.reset();
     els.productEditId.value = '';
-    els.unitWeightKg.value = 0.2;
     els.cancelProductEdit.classList.add('hidden');
   }
 
@@ -1009,7 +1117,6 @@
 
   async function deleteProduct(id) {
     if (!can('products', 'delete')) return toast('لا تملك صلاحية حذف الأصناف.');
-    if (state.products.length <= 1) return toast('يجب إبقاء صنف واحد على الأقل.');
     if (state.production.some(r => r.productId === id)) return toast('هذا الصنف مستخدم في سجلات إنتاج، لا يمكن حذفه.');
     if (!confirm('حذف الصنف؟')) return;
     try { const { error } = await db.from('products').update({ is_active: false }).eq('id', id); if (error) throw error; await loadRemoteState(); renderAll(); toast('تم إيقاف الصنف.'); }
@@ -1073,7 +1180,7 @@
   function renderRecentProduction() {
     const rows = [...state.production].sort((a,b) => `${b.date}${b.updatedAt||''}`.localeCompare(`${a.date}${a.updatedAt||''}`)).slice(0,5);
     $('#recentProduction').innerHTML = rows.length ? rows.map(r => {
-      const p = getProduct(r.productId) || r.productSnapshot || { name: 'صنف محذوف' };
+      const p = recordProduct(r) || { name: 'صنف غير متاح' };
       const output = recordOutput(r);
       return `<div class="activity-item"><div><strong>${escapeHtml(p.name)}</strong><span>${formatDate(r.date)} • ${escapeHtml(r.shift)}</span></div><div class="activity-metric"><strong>${num(output.weightKg,2)} كغم</strong><small>${num(r.pallets)} مشتاح</small></div></div>`;
     }).join('') : `<div class="empty-state">لا يوجد إنتاج مسجل بعد.</div>`;
@@ -1097,15 +1204,16 @@
     const raw = sum(records, recordRawWeight);
     const output = sum(records, r => recordOutput(r).weightKg);
     const waste = sum(records, r => r.wasteWeight);
-    const transparentNylon = sum(records, r => r.transparentNylonWeight);
-    const printedWeight = sum(records, r => r.printedNylonWeight);
-    const printedRolls = sum(records, r => r.printedNylonRolls);
+    const transparentNylon = sum(records, transparentNylonTotalWeight);
+    const transparentQuantity = sum(records, transparentNylonTotalQuantity);
+    const printedWeight = sum(records, printedNylonTotalWeight);
+    const printedQuantity = sum(records, printedNylonTotalQuantity);
     $('#weeklySummary').innerHTML = [
       ['وزن الرولات', `${num(raw,2)} كغم`],
       ['وزن الإنتاج', `${num(output,2)} كغم`],
       ['المشاتيح', num(sum(records, r => r.pallets))],
-      ['نايلون شفاف', `${num(transparentNylon,2)} كغم`],
-      ['نايلون مطبوع', `${num(printedWeight,2)} كغم / ${num(printedRolls)} رولة`],
+      ['نايلون شفاف', `${num(transparentNylon,2)} كغم / ${num(transparentQuantity)} حبة`],
+      ['نايلون مطبوع', `${num(printedWeight,2)} كغم / ${num(printedQuantity)} حبة`],
       ['التوالف', `${num(waste,2)} كغم`]
     ].map(([label,value]) => `<div class="summary-item"><span>${label}</span><strong>${value}</strong></div>`).join('');
   }
@@ -1132,7 +1240,21 @@
   }
 
   function renderProducts() {
-    $('#productsGrid').innerHTML = state.products.map(p => {
+    const grid = $('#productsGrid');
+    if (!state.products.length) {
+      const createGuidance = can('products', 'create')
+        ? '<p>أضف أول صنف لتظهر بياناته في نموذج الإنتاج.</p><button class="primary-btn" type="button" data-add-first-product>إضافة أول صنف</button>'
+        : '';
+      grid.innerHTML = `<div class="empty-state product-empty-state"><strong>لا توجد أصناف مضافة بعد</strong>${createGuidance}</div>`;
+      $('[data-add-first-product]', grid)?.addEventListener('click', () => {
+        resetProductForm();
+        els.productFormPanel.classList.remove('hidden');
+        els.productFormPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        els.productName.focus({ preventScroll: true });
+      });
+      return;
+    }
+    grid.innerHTML = state.products.map(p => {
       const one = calculateOutput(p, 1, 0);
       const packWeight = p.unitsPerPack * p.unitWeightKg;
       return `<article class="product-card">
@@ -1175,8 +1297,12 @@
     const records = engineerCurrentWeekRecords();
     $('#engineerReportProductionWeight').textContent = num(sum(records, r => recordOutput(r).weightKg), 2);
     $('#engineerReportPallets').textContent = num(sum(records, r => r.pallets));
-    $('#engineerReportPrintedNylonWeight').textContent = num(sum(records, r => r.printedNylonWeight), 2);
-    $('#engineerReportPrintedNylonRolls').textContent = num(sum(records, r => r.printedNylonRolls));
+    $('#engineerReportTransparentNylonWeight').textContent = num(sum(records, transparentNylonTotalWeight), 2);
+    $('#engineerReportTransparentNylonQuantity').textContent = num(sum(records, transparentNylonTotalQuantity));
+    $('#engineerReportPrintedNylonWeight').textContent = num(sum(records, printedNylonTotalWeight), 2);
+    $('#engineerReportPrintedNylonQuantity').textContent = num(sum(records, printedNylonTotalQuantity));
+    renderNylonBreakdown('#engineerTransparentBreakdown', nylonBreakdown(records, 'transparentNylonItems'));
+    renderNylonBreakdown('#engineerPrintedBreakdown', nylonBreakdown(records, 'printedNylonItems'));
     $('#engineerReportPeriodLabel').textContent = `من السبت ${formatDate(from)} إلى الجمعة ${formatDate(to)}`;
     $('#engineerReportEmpty')?.classList.toggle('hidden', records.length > 0);
   }
@@ -1189,16 +1315,20 @@
     const outputWeight = sum(records, r => recordOutput(r).weightKg);
     const pallets = sum(records, r => r.pallets);
     const waste = sum(records, r => r.wasteWeight);
-    const transparentNylon = sum(records, r => r.transparentNylonWeight);
-    const printedNylonWeight = sum(records, r => r.printedNylonWeight);
-    const printedNylonRolls = sum(records, r => r.printedNylonRolls);
+    const transparentNylon = sum(records, transparentNylonTotalWeight);
+    const transparentNylonQuantity = sum(records, transparentNylonTotalQuantity);
+    const printedNylonWeight = sum(records, printedNylonTotalWeight);
+    const printedNylonQuantity = sum(records, printedNylonTotalQuantity);
     $('#reportRaw').textContent = num(raw,2);
     $('#reportProductionWeight').textContent = num(outputWeight,2);
     $('#reportPallets').textContent = num(pallets);
     $('#reportWaste').textContent = num(waste,2);
     $('#reportTransparentNylon').textContent = num(transparentNylon,2);
+    $('#reportTransparentNylonQuantity').textContent = num(transparentNylonQuantity);
     $('#reportPrintedNylonWeight').textContent = num(printedNylonWeight,2);
-    $('#reportPrintedNylonRolls').textContent = num(printedNylonRolls);
+    $('#reportPrintedNylonQuantity').textContent = num(printedNylonQuantity);
+    renderNylonBreakdown('#managementTransparentBreakdown', nylonBreakdown(records, 'transparentNylonItems'));
+    renderNylonBreakdown('#managementPrintedBreakdown', nylonBreakdown(records, 'printedNylonItems'));
     $('#reportPeriodLabel').textContent = from && to ? `من ${formatDate(from)} إلى ${formatDate(to)}` : 'كل الفترات';
 
     const grouped = new Map();
@@ -1208,27 +1338,35 @@
     });
     const days = Array.from(grouped.entries()).sort((a,b) => a[0].localeCompare(b[0]));
     $('#weeklyDailyTable').innerHTML = days.length ? days.map(([date, dayRecords]) => {
-      const names = [...new Set(dayRecords.map(r => (getProduct(r.productId) || r.productSnapshot || {}).name || '—'))].join('، ');
+      const names = [...new Set(dayRecords.map(r => recordProduct(r)?.name || '—'))].join('، ');
       const rollCount = sum(dayRecords, r => (r.rolls || []).length);
       const rawW = sum(dayRecords, recordRawWeight);
       const pal = sum(dayRecords, r => r.pallets);
       const prodW = sum(dayRecords, r => recordOutput(r).weightKg);
       const wasteW = sum(dayRecords, r => r.wasteWeight);
-      const transparentW = sum(dayRecords, r => r.transparentNylonWeight);
-      const printedW = sum(dayRecords, r => r.printedNylonWeight);
-      const printedRolls = sum(dayRecords, r => r.printedNylonRolls);
-      return `<tr><td>${formatDate(date,true)}</td><td>${escapeHtml(names)}</td><td>${num(rollCount)}</td><td>${num(rawW,2)} كغم</td><td>${num(pal)}</td><td>${num(prodW,2)} كغم</td><td>${num(transparentW,2)} كغم</td><td>${num(printedW,2)} كغم</td><td>${num(printedRolls)}</td><td>${num(wasteW,2)} كغم</td></tr>`;
-    }).join('') : `<tr><td colspan="10"><div class="empty-state">لا يوجد إنتاج ضمن هذه الفترة.</div></td></tr>`;
-    $('#weeklyDailyFoot').innerHTML = `<tr><td colspan="2">المجموع</td><td>${num(sum(records,r=>(r.rolls||[]).length))}</td><td>${num(raw,2)} كغم</td><td>${num(pallets)}</td><td>${num(outputWeight,2)} كغم</td><td>${num(transparentNylon,2)} كغم</td><td>${num(printedNylonWeight,2)} كغم</td><td>${num(printedNylonRolls)}</td><td>${num(waste,2)} كغم</td></tr>`;
+      const transparentW = sum(dayRecords, transparentNylonTotalWeight);
+      const transparentQ = sum(dayRecords, transparentNylonTotalQuantity);
+      const printedW = sum(dayRecords, printedNylonTotalWeight);
+      const printedQ = sum(dayRecords, printedNylonTotalQuantity);
+      return `<tr><td>${formatDate(date,true)}</td><td>${escapeHtml(names)}</td><td>${num(rollCount)}</td><td>${num(rawW,2)} كغم</td><td>${num(pal)}</td><td>${num(prodW,2)} كغم</td><td>${num(transparentW,2)} كغم / ${num(transparentQ)}</td><td>${num(printedW,2)} كغم / ${num(printedQ)}</td><td>${num(wasteW,2)} كغم</td></tr>`;
+    }).join('') : `<tr><td colspan="9"><div class="empty-state">لا يوجد إنتاج ضمن هذه الفترة.</div></td></tr>`;
+    $('#weeklyDailyFoot').innerHTML = `<tr><td colspan="2">المجموع</td><td>${num(sum(records,r=>(r.rolls||[]).length))}</td><td>${num(raw,2)} كغم</td><td>${num(pallets)}</td><td>${num(outputWeight,2)} كغم</td><td>${num(transparentNylon,2)} كغم / ${num(transparentNylonQuantity)}</td><td>${num(printedNylonWeight,2)} كغم / ${num(printedNylonQuantity)}</td><td>${num(waste,2)} كغم</td></tr>`;
 
     const byProduct = new Map();
     records.forEach(r => {
-      const key = r.productId;
-      if (!byProduct.has(key)) byProduct.set(key, []);
-      byProduct.get(key).push(r);
+      const product = recordProduct(r);
+      const key = JSON.stringify([
+        r.productId,
+        product?.name || '',
+        product?.bagsPerPallet || 0,
+        product?.packsPerBag || 0,
+        product?.unitsPerPack || 0,
+        product?.unitWeightKg || 0
+      ]);
+      if (!byProduct.has(key)) byProduct.set(key, { product: product || { name: 'صنف غير متاح' }, records: [] });
+      byProduct.get(key).records.push(r);
     });
-    $('#weeklyProductTable').innerHTML = byProduct.size ? Array.from(byProduct.entries()).map(([id, rs]) => {
-      const p = getProduct(id) || rs[0].productSnapshot || { name: 'صنف محذوف' };
+    $('#weeklyProductTable').innerHTML = byProduct.size ? Array.from(byProduct.values()).map(({ product: p, records: rs }) => {
       const palletsTotal = sum(rs,r=>r.pallets);
       const bagsTotal = sum(rs,r=>recordOutput(r).bags);
       const packsTotal = sum(rs,r=>recordOutput(r).packs);
@@ -1276,22 +1414,23 @@
     const rows = [...state.production].filter(r => {
       if (currentRole === 'engineer' && (r.date < weekFrom || r.date > today || r.createdBy !== currentUser?.id)) return false;
       if (selectedDate && r.date !== selectedDate) return false;
-      const p = getProduct(r.productId) || r.productSnapshot || { name: '' };
+      const p = recordProduct(r) || { name: '' };
       const hay = [r.date, p.name, r.shift, ...(r.rolls||[]).map(x=>x.code)].join(' ').toLowerCase();
       return !query || hay.includes(query);
     }).sort((a,b) => b.date.localeCompare(a.date));
     $('#recordsTable').innerHTML = rows.length ? rows.map(r => {
-      const p = getProduct(r.productId) || r.productSnapshot || { name: 'صنف محذوف' };
+      const p = recordProduct(r) || { name: 'صنف غير متاح' };
       const output = recordOutput(r);
       const rollText = (r.rolls||[]).map(x => `${x.code} (${num(x.weight,2)})`).join('، ');
-      const printedNylonText = Number(r.printedNylonRolls || 0) > 0 ? `${num(r.printedNylonRolls)} رولة` : `${num(r.printedNylonWeight || 0,2)} كغم`;
+      const transparentDetails = nylonDetails(r.transparentNylonItems);
+      const printedDetails = nylonDetails(r.printedNylonItems);
       const creator = profileNames.get(r.createdBy) || r.createdBy || '—';
       const updater = profileNames.get(r.updatedBy) || r.updatedBy || '';
       const updatedMeta = r.updatedBy ? `<span>آخر تعديل بواسطة: ${escapeHtml(updater)}</span><span>آخر تعديل: ${formatTimestamp(r.updatedAt)}</span>` : '';
       const canEdit = (can('production','update') || can('records','update')) && (can('production') || can('records')) && (['owner', 'admin'].includes(currentRole) || r.createdBy === currentUser?.id);
       const canDelete = currentRole !== 'engineer' && (can('production','delete') || can('records','delete'));
       const actions = `<div class="action-cell">${canEdit ? `<button class="icon-btn" data-edit-production="${r.id}">تعديل</button>` : ''}${canDelete ? `<button class="danger-btn" data-delete-production="${r.id}">حذف</button>` : ''}</div>`;
-      return `<tr><td>${formatDate(r.date)}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(r.shift)}</td><td>${escapeHtml(rollText || '—')}</td><td>${num(recordRawWeight(r),2)} كغم</td><td>${num(r.pallets)}</td><td>${num(output.weightKg,2)} كغم</td><td>${num(r.transparentNylonWeight || 0,2)} كغم</td><td>${printedNylonText}</td><td>${num(r.wasteWeight,2)} كغم</td><td><div class="record-meta"><span>أُضيف بواسطة: ${escapeHtml(creator)}</span><span>تاريخ الإضافة: ${formatTimestamp(r.createdAt)}</span>${updatedMeta}</div>${actions}</td></tr>`;
+      return `<tr><td>${formatDate(r.date)}</td><td>${escapeHtml(p.name)}</td><td>${escapeHtml(r.shift)}</td><td>${escapeHtml(rollText || '—')}</td><td>${num(recordRawWeight(r),2)} كغم</td><td>${num(r.pallets)}</td><td>${num(output.weightKg,2)} كغم</td><td><span class="nylon-summary">${num(transparentNylonTotalWeight(r),2)} كغم / ${num(transparentNylonTotalQuantity(r))} حبة</span><small class="nylon-details">${escapeHtml(transparentDetails || '—')}</small></td><td><span class="nylon-summary">${num(printedNylonTotalWeight(r),2)} كغم / ${num(printedNylonTotalQuantity(r))} حبة</span><small class="nylon-details">${escapeHtml(printedDetails || '—')}</small></td><td>${num(r.wasteWeight,2)} كغم<small class="nylon-details">${escapeHtml(r.wasteType || '—')}</small></td><td><div class="record-meta"><span>أُضيف بواسطة: ${escapeHtml(creator)}</span><span>تاريخ الإضافة: ${formatTimestamp(r.createdAt)}</span>${updatedMeta}</div>${actions}</td></tr>`;
     }).join('') : `<tr><td colspan="11"><div class="empty-state">لا توجد سجلات.</div></td></tr>`;
     $$('[data-edit-production]').forEach(btn => btn.addEventListener('click', () => editProduction(btn.dataset.editProduction)));
     $$('[data-delete-production]').forEach(btn => btn.addEventListener('click', () => deleteProduction(btn.dataset.deleteProduction)));
@@ -1461,18 +1600,22 @@
         ['الفترة', `من ${from} إلى ${to}`],
         ['عدد المشاتيح المنتجة', sum(records, r => r.pallets)],
         ['وزن الإنتاج بالكغم', round2(sum(records, r => recordOutput(r).weightKg))],
-        ['النايلون المطبوع بالكغم', round2(sum(records, r => r.printedNylonWeight))],
-        ['عدد رولات النايلون المطبوع', sum(records, r => r.printedNylonRolls)]
+        ['الشفاف - إجمالي الوزن', round2(sum(records, transparentNylonTotalWeight))],
+        ['الشفاف - إجمالي العدد', sum(records, transparentNylonTotalQuantity)],
+        ['الشفاف - التفاصيل', nylonDetails(records.flatMap(r => r.transparentNylonItems))],
+        ['المطبوع - إجمالي الوزن', round2(sum(records, printedNylonTotalWeight))],
+        ['المطبوع - إجمالي العدد', sum(records, printedNylonTotalQuantity)],
+        ['المطبوع - التفاصيل', nylonDetails(records.flatMap(r => r.printedNylonItems))]
       ];
       downloadCsv(`salima-engineer-week-${from}-${to}.csv`, [['البند', 'القيمة'], ...rows]);
       return;
     }
     const records = recordsInRange(els.reportFrom.value, els.reportTo.value);
-    const headers = ['التاريخ','الصنف','الوردية','أكواد الرولات','وزن الرولات كغم','المشاتيح','الشوالات','الحبات','الحبات الصغيرة','وزن الإنتاج كغم','نايلون شفاف كغم','نايلون مطبوع كغم','نايلون مطبوع عدد الرولات','التوالف كغم'];
+    const headers = ['التاريخ','الصنف','الوردية','أكواد الرولات','وزن الرولات كغم','المشاتيح','الشوالات','الحبات','الحبات الصغيرة','وزن الإنتاج كغم','شفاف - التفاصيل','شفاف - إجمالي الوزن','شفاف - إجمالي العدد','مطبوع - التفاصيل','مطبوع - إجمالي الوزن','مطبوع - إجمالي العدد','التالف - الوزن','التالف - الوصف'];
     const rows = records.sort((a,b)=>a.date.localeCompare(b.date)).map(r => {
-      const p = getProduct(r.productId) || r.productSnapshot || { name: '' };
+      const p = recordProduct(r) || { name: '' };
       const out = recordOutput(r);
-      return [r.date,p.name,r.shift,(r.rolls||[]).map(x=>x.code).join(' | '),recordRawWeight(r),r.pallets,out.bags,out.packs,out.units,out.weightKg,r.transparentNylonWeight || 0,r.printedNylonWeight || 0,r.printedNylonRolls || 0,r.wasteWeight];
+      return [r.date,p.name,r.shift,(r.rolls||[]).map(x=>x.code).join(' | '),recordRawWeight(r),r.pallets,out.bags,out.packs,out.units,out.weightKg,nylonDetails(r.transparentNylonItems),transparentNylonTotalWeight(r),transparentNylonTotalQuantity(r),nylonDetails(r.printedNylonItems),printedNylonTotalWeight(r),printedNylonTotalQuantity(r),r.wasteWeight,r.wasteType || ''];
     });
     downloadCsv(`salima-weekly-${els.reportFrom.value || 'all'}-${els.reportTo.value || 'all'}.csv`, [headers, ...rows]);
   }
@@ -1510,8 +1653,9 @@
     els.logoutBtn.addEventListener('click', handleLogout);
 
     $('#addRollRow').addEventListener('click', () => addProductionRollRow());
+    $('#addTransparentNylonItem').addEventListener('click', () => addNylonItemRow('transparent'));
+    $('#addPrintedNylonItem').addEventListener('click', () => addNylonItemRow('printed'));
     els.prodProduct.addEventListener('change', updateProductionCalculation);
-    els.printedNylonMode.addEventListener('change', updatePrintedNylonMode);
     els.palletsProduced.addEventListener('input', updateProductionCalculation);
     els.extraBags.addEventListener('input', updateProductionCalculation);
     els.productionForm.addEventListener('submit', saveProduction);
@@ -1556,7 +1700,7 @@
   }
 
   function initDates() {
-    const today = isoToday();
+    const today = factoryCalendar?.today || isoToday();
     els.todayLabel.textContent = new Intl.DateTimeFormat('ar-PS', {weekday:'long', day:'2-digit', month:'long', year:'numeric'}).format(new Date(`${today}T12:00:00`));
     els.prodDate.value = today;
     els.shipmentDate.value = today;
@@ -1569,7 +1713,6 @@
   applyTheme(localStorage.getItem(THEME_KEY) || 'day');
   initDates();
   bindEvents();
-  updatePrintedNylonMode();
   renderProductOptions();
   ensureProductionRow();
   initCloud();

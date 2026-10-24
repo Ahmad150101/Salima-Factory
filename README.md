@@ -3,7 +3,7 @@
 نظام إدارة إنتاج مصنع سليمة — النسخة السحابية.
 
 ## البنية
-- واجهة ثابتة منشورة من فرع `main` (Cloudflare Pages، مع workflow حالي لـ GitHub Pages أيضًا).
+- واجهة ثابتة منشورة من فرع `main` عبر Cloudflare Pages.
 - Supabase: قاعدة البيانات، تسجيل الدخول، الصلاحيات، وسجل التدقيق.
 - الأدوار الافتراضية: `owner` و`admin` و`engineer`.
 - يمكن للمالك تخصيص صلاحيات كل مستخدم عبر `user_permissions`، وتبقى صلاحيات المالك كاملة دائمًا.
@@ -24,7 +24,12 @@ node tests/static-check.mjs
 
 ## Migrations
 - ملف `20261005_document_user_permissions.sql` يوثق نظام الصلاحيات المطبق مسبقًا على production.
+- ملف `20261024171859_server_calendar_and_detailed_nylon.sql` يطابق migration المطبق على production: تقويم المصنع الآمن وحقول النايلون JSONB مع backfill مرحلي، مع إبقاء أعمدة legacy مؤقتًا.
 - لا تعِد تشغيل migration التوثيقي على production قبل مقارنة سجل migrations والمخطط الحالي.
+
+## النسخ الاحتياطي
+- `daily-export` يرسل JSONB والتفاصيل والإجماليات إلى Google Sheet عبر جميع صفحات البيانات.
+- راجع `backup/README.md` لنشر Apps Script والتحقق من Google Sheet وملفات Excel والـtrigger اليومي.
 
 ## النشر
 أي push إلى `main` في مستودع `Ahmad150101/Salima-Factory` يطلق عمليات النشر المرتبطة بالمستودع.

@@ -4,6 +4,26 @@
 create extension if not exists pgcrypto;
 create schema if not exists private;
 
+create or replace function private.is_valid_nylon_items(items jsonb)
+returns boolean language plpgsql immutable strict set search_path = '' as $$
+declare item jsonb;
+begin
+  if jsonb_typeof(items) <> 'array' then return false; end if;
+  for item in select value from jsonb_array_elements(items) loop
+    if jsonb_typeof(item) <> 'object' or jsonb_typeof(item -> 'name') <> 'string'
+      or btrim(item ->> 'name') = '' or jsonb_typeof(item -> 'weight_kg') <> 'number'
+      or (item ->> 'weight_kg')::numeric < 0 or jsonb_typeof(item -> 'quantity') <> 'number'
+      or (item ->> 'quantity')::numeric < 0
+      or (item ->> 'quantity')::numeric <> trunc((item ->> 'quantity')::numeric) then return false;
+    end if;
+  end loop;
+  return true;
+exception when others then return false;
+end;
+$$;
+revoke all on function private.is_valid_nylon_items(jsonb) from public, anon, authenticated;
+grant execute on function private.is_valid_nylon_items(jsonb) to authenticated, service_role;
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null,
@@ -73,6 +93,8 @@ create table if not exists public.production_records (
   printed_nylon_mode text not null default 'weight' check (printed_nylon_mode in ('weight','rolls')),
   printed_nylon_weight numeric(14,2) not null default 0 check (printed_nylon_weight >= 0),
   printed_nylon_rolls integer not null default 0 check (printed_nylon_rolls >= 0),
+  transparent_nylon_items jsonb not null default '[]'::jsonb check (private.is_valid_nylon_items(transparent_nylon_items)),
+  printed_nylon_items jsonb not null default '[]'::jsonb check (private.is_valid_nylon_items(printed_nylon_items)),
   waste_weight numeric(14,2) not null default 0 check (waste_weight >= 0),
   waste_type text,
   notes text,
@@ -180,6 +202,14 @@ revoke all on function private.factory_today() from public;
 revoke all on function private.current_week_start() from public;
 grant execute on function private.factory_today() to authenticated;
 grant execute on function private.current_week_start() to authenticated;
+
+create or replace function public.get_factory_calendar()
+returns table(today date, week_start date, week_end date)
+language sql stable security invoker set search_path = '' as $$
+  select private.factory_today(), private.current_week_start(), private.current_week_start() + 6;
+$$;
+revoke all on function public.get_factory_calendar() from public, anon;
+grant execute on function public.get_factory_calendar() to authenticated;
 
 create or replace function private.role_has_permission(app_role text, requested_permission text)
 returns boolean
@@ -471,16 +501,3 @@ create index if not exists user_presence_last_seen_idx on public.user_presence(l
 create index if not exists user_permissions_user_idx on public.user_permissions(user_id);
 create index if not exists audit_logs_created_at_idx on public.audit_logs(created_at desc);
 create index if not exists audit_logs_filters_idx on public.audit_logs(user_id, entity_type, action, created_at desc);
-
-insert into public.products (name, bags_per_pallet, packs_per_bag, units_per_pack, unit_weight_kg)
-values
-  ('محارم المنى 1.2 كغم', 27, 10, 6, 0.200),
-  ('محارم المرام 1 كغم', 30, 10, 5, 0.200),
-  ('محارم رانيا 1 كغم', 40, 10, 4, 0.250),
-  ('محارم الهنا 1 كغم', 30, 10, 5, 0.200)
-on conflict (name) do update set
-  bags_per_pallet = excluded.bags_per_pallet,
-  packs_per_bag = excluded.packs_per_bag,
-  units_per_pack = excluded.units_per_pack,
-  unit_weight_kg = excluded.unit_weight_kg,
-  is_active = true;

@@ -211,6 +211,21 @@ button { cursor: pointer; }
 .summary-item span { color: var(--muted); }
 .summary-item strong { color: var(--green-900); }
 .empty-state { border: 1px dashed #cddbd5; border-radius: 14px; padding: 24px; text-align: center; color: var(--muted); background: #fbfdfc; }
+.empty-state strong { display: block; color: var(--ink); }
+.empty-state p { margin: 7px 0 0; }
+.production-products-empty { margin-top: 13px; padding: 16px; }
+.production-products-empty .text-btn { margin-top: 10px; }
+.calendar-warning { margin: 0 0 16px; padding: 12px 16px; border: 1px solid #e5b85c; border-radius: 12px; background: #fff8e6; color: #6e4b05; font-weight: 700; }
+.nylon-panel .table-scroll { margin-top: 4px; }
+.nylon-item-name { min-width: 180px; }
+.nylon-item-weight, .nylon-item-quantity { min-width: 110px; }
+.nylon-summary { display: block; white-space: nowrap; }
+.nylon-details { display: block; margin-top: 4px; color: var(--muted); font-size: .78rem; line-height: 1.55; white-space: normal; min-width: 190px; }
+.nylon-breakdowns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+.nylon-breakdowns > div { padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-soft, #fbfdfc); }
+.nylon-breakdowns h4 { margin: 0 0 8px; }
+.nylon-breakdown-row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.nylon-breakdown-row:last-child { border-bottom: 0; }
 .access-empty { max-width: 680px; margin: 10vh auto 0; }
 .access-empty h2 { margin: 0 0 8px; color: var(--ink); }
 .access-empty p { margin: 0; }
@@ -272,6 +287,8 @@ input:focus, select:focus, textarea:focus { border-color: #72b69d; box-shadow: 0
 .kpi-mini strong { display: block; margin-top: 4px; color: var(--green-900); font-size: 1.35rem; }
 
 .product-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 15px; }
+.product-empty-state { grid-column: 1 / -1; }
+.product-empty-state .primary-btn { margin-top: 14px; }
 .product-card { background: #fff; border: 1px solid #e1ebe7; border-radius: 20px; padding: 20px; box-shadow: 0 8px 25px rgba(33,73,60,.04); }
 .product-card-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
 .product-card h3 { margin: 0 0 4px; }
@@ -352,6 +369,7 @@ input:focus, select:focus, textarea:focus { border-color: #72b69d; box-shadow: 0
 }
 
 @media (max-width: 620px) {
+  .nylon-breakdowns { grid-template-columns: 1fr; }
   .topbar-actions .date-pill { display: none; }
   .user-chip { display: none; }
   .topbar { gap: 8px; padding: 12px; }

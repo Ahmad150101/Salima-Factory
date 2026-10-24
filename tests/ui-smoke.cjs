@@ -23,9 +23,10 @@ const supabaseStub = String.raw`
   const sessionUserId = sessionRole === 'engineer' ? engineerId : sessionRole === 'admin' ? adminId : ownerId;
   const productId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-  const today = new Intl.DateTimeFormat('en-CA', {
+  const deviceToday = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Hebron', year: 'numeric', month: '2-digit', day: '2-digit'
   }).format(new Date());
+  const today = params.get('factoryToday') || deviceToday;
   function shiftIso(iso, days) {
     const date = new Date(iso + 'T12:00:00Z');
     date.setUTCDate(date.getUTCDate() + days);
@@ -40,8 +41,8 @@ const supabaseStub = String.raw`
       id, production_date: date, shift: 'صباحية', product_id: productId,
       product_snapshot: { id: productId, name: 'منتج تجريبي', bagsPerPallet: 30, packsPerBag: 10, unitsPerPack: 5, unitWeightKg: .2 },
       rolls: [{ code, weight: 12.5, note: '' }], pallets, extra_bags: 0,
-      transparent_nylon_weight: 1, printed_nylon_mode: 'weight',
-      printed_nylon_weight: 2.5, printed_nylon_rolls: 1,
+      transparent_nylon_items: [{ name: 'شفاف تجريبي', weight_kg: 1, quantity: 2 }],
+      printed_nylon_items: [{ name: 'مطبوع تجريبي', weight_kg: 2.5, quantity: 1 }],
       waste_weight: .5, waste_type: 'قص', notes: 'اختبار', created_by: createdBy,
       updated_by: null, created_at: date + 'T08:00:00Z', updated_at: date + 'T08:00:00Z'
     };
@@ -91,6 +92,7 @@ const supabaseStub = String.raw`
 
   window.__queryLog = [];
   window.__permissionWrites = [];
+  window.__productionWrites = [];
   window.__fixture = { today, weekStart, weekEnd, recordCount, sessionRole };
 
   function permissionAllowed(key) {
@@ -163,6 +165,7 @@ const supabaseStub = String.raw`
           if (index >= 0) data.user_permissions[index] = row; else data.user_permissions.push(row);
         }
       }
+      if (['insert', 'update'].includes(this.operation) && this.table === 'production_records') window.__productionWrites.push(this.payload);
       let rows = this.rows();
       if (this.rangeBounds) rows = rows.slice(this.rangeBounds[0], this.rangeBounds[1] + 1);
       else if (this.limitCount != null) rows = rows.slice(0, this.limitCount);
@@ -188,17 +191,29 @@ const supabaseStub = String.raw`
       setSession: async () => ({ data: {}, error: null })
     },
     functions: { invoke: async () => ({ data: {}, error: null }) },
+    rpc: async name => name === 'get_factory_calendar'
+      ? ({ data: [{ today, week_start: weekStart, week_end: weekEnd }], error: null })
+      : ({ data: null, error: { message: 'unknown rpc' } }),
     from: table => new Query(table)
   };
   window.supabase = { createClient: () => client };
 })();`;
 
-async function openScenario(browser, { role, size = 1005, recordsOnly = false, emptyWeek = false, viewport = { width: 1440, height: 900 } }) {
+async function openScenario(browser, { role, size = 1005, recordsOnly = false, emptyWeek = false, factoryToday = '', mockDate = '', viewport = { width: 1440, height: 900 } }) {
   const page = await browser.newPage({ viewport, locale: 'ar' });
+  if (mockDate) await page.addInitScript(value => {
+    const NativeDate = Date;
+    class MockDate extends NativeDate {
+      constructor(...args) { super(...(args.length ? args : [value + 'T12:00:00Z'])); }
+      static now() { return new NativeDate(value + 'T12:00:00Z').getTime(); }
+    }
+    window.Date = MockDate;
+  }, mockDate);
   await page.route('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4', route => route.fulfill({ status: 200, contentType: 'application/javascript', body: supabaseStub }));
   const query = new URLSearchParams({ role, size: String(size) });
   if (recordsOnly) query.set('recordsOnly', '1');
   if (emptyWeek) query.set('emptyWeek', '1');
+  if (factoryToday) query.set('factoryToday', factoryToday);
   await page.goto(`${appUrl}/?${query}`, { waitUntil: 'networkidle' });
   await page.locator('#appShell:not(.hidden)').waitFor({ state: 'visible' });
   return page;
@@ -300,6 +315,32 @@ async function assertMobileRecordsLayout(page) {
   assert(engineerProductionQuery.filters.some(filter => filter.operator === 'eq' && filter.key === 'created_by'), 'engineer query must request own rows only');
   assert(engineerProductionQuery.filters.some(filter => filter.operator === 'gte' && filter.key === 'production_date'), 'engineer query must start on Saturday');
   assert(engineerProductionQuery.filters.some(filter => filter.operator === 'lte' && filter.key === 'production_date'), 'engineer query must stop today');
+  await engineer.locator('[data-view="production"]').click();
+  await engineer.locator('.roll-code').fill('NYLON-TEST');
+  await engineer.locator('.roll-weight').fill('10');
+  await engineer.locator('#palletsProduced').fill('1');
+  await engineer.locator('#extraBags').fill('0');
+  await engineer.locator('#wasteWeight').fill('1');
+  await engineer.locator('#prodNotes').fill('اختبار نايلون متعدد');
+  await engineer.locator('#saveProductionBtn').click();
+  assert.match(await engineer.locator('#toast').innerText(), /وصف التالف/, 'waste greater than zero must require a free-text description');
+  await engineer.locator('#wasteType').fill('قص أطراف');
+  await engineer.locator('#addTransparentNylonItem').click();
+  await engineer.locator('#transparentNylonRows .nylon-item-name').fill('شفاف كبير');
+  await engineer.locator('#transparentNylonRows .nylon-item-weight').fill('50');
+  await engineer.locator('#transparentNylonRows .nylon-item-quantity').fill('5');
+  await engineer.locator('#addTransparentNylonItem').click();
+  await engineer.locator('#addPrintedNylonItem').click();
+  await engineer.locator('#printedNylonRows .nylon-item-name').fill('مطبوع المنى');
+  await engineer.locator('#printedNylonRows .nylon-item-weight').fill('0');
+  await engineer.locator('#printedNylonRows .nylon-item-quantity').fill('3');
+  await engineer.locator('#saveProductionBtn').click();
+  await engineer.locator('#engineerSaveDialog button[value="confirm"]').click();
+  await engineer.waitForTimeout(100);
+  const nylonWrite = await engineer.evaluate(() => window.__productionWrites.at(-1));
+  assert.deepEqual(nylonWrite.transparent_nylon_items, [{ name: 'شفاف كبير', weight_kg: 50, quantity: 5 }], 'blank nylon rows must not be saved');
+  assert.deepEqual(nylonWrite.printed_nylon_items, [{ name: 'مطبوع المنى', weight_kg: 0, quantity: 3 }], 'nylon quantity must be saved even with zero weight');
+  assert.equal(nylonWrite.waste_type, 'قص أطراف', 'free-text waste description must be saved');
   await engineer.locator('[data-view="reports"]').click();
   assert.equal(await engineer.locator('#engineerWeeklyReport').isVisible(), true);
   assert.equal(await engineer.locator('#refreshEngineerWeeklyReport').isVisible(), true, 'engineer weekly refresh button must be visible');
@@ -308,13 +349,13 @@ async function assertMobileRecordsLayout(page) {
   await engineer.locator('#refreshEngineerWeeklyReport').click();
   assert.notEqual((await engineer.locator('#engineerReportPallets').innerText()).trim(), 'قديم', 'weekly report button must refresh the summary');
   assert.equal(await engineer.locator('#engineerReportEmpty').isVisible(), false, 'non-empty engineer week must not show the empty message');
-  assert.equal(await engineer.locator('#engineerWeeklyReport .stat-card').count(), 4, 'engineer report must contain exactly four metrics');
+  assert.equal(await engineer.locator('#engineerWeeklyReport .stat-card').count(), 6, 'engineer report must contain production and separate transparent/printed metrics');
   assert.equal(await engineer.locator('#printableWeeklyReport').isVisible(), false, 'management report must be hidden from engineer');
   assert.equal(await engineer.locator('.monthly-reconciliation').isVisible(), false, 'reconciliation must be hidden from engineer');
   assert.equal(await engineer.locator('#exportEngineerWeeklyCsv').isVisible(), false, 'engineer export must default off');
   assert.equal(await engineer.locator('#printEngineerWeeklyReport').isVisible(), false, 'engineer print must default off');
   const engineerReportText = await engineer.locator('#engineerWeeklyReport').innerText();
-  for (const forbidden of ['وزن الرولات', 'التوالف', 'نايلون شفاف', 'الشحنات', 'الموردين', 'الرصيد', 'الوارد']) assert.equal(engineerReportText.includes(forbidden), false, `engineer report leaked: ${forbidden}`);
+  for (const forbidden of ['وزن الرولات', 'التوالف', 'الشحنات', 'الموردين', 'الرصيد', 'الوارد']) assert.equal(engineerReportText.includes(forbidden), false, `engineer report leaked: ${forbidden}`);
   await engineer.waitForTimeout(400);
   if (screenshotDir) await engineer.screenshot({ path: join(screenshotDir, 'salima-engineer-desktop-weekly-report.png') });
   await engineer.locator('[data-view="records"]').click();
@@ -335,7 +376,7 @@ async function assertMobileRecordsLayout(page) {
   await engineer.waitForTimeout(300);
   assert.equal(await engineer.locator('#sidebar').evaluate(el => el.classList.contains('open')), false, 'mobile navigation must close the sidebar');
   assert.equal(await engineer.locator('#engineerWeeklyReport').isVisible(), true);
-  assert.equal(await engineer.locator('#engineerWeeklyReport .stat-card').count(), 4);
+  assert.equal(await engineer.locator('#engineerWeeklyReport .stat-card').count(), 6);
   assert.equal(await engineer.locator('#engineerWeeklyReport').evaluate(el => el.getBoundingClientRect().right <= innerWidth + 1), true, 'engineer report exceeds mobile viewport');
   if (screenshotDir) await engineer.screenshot({ path: join(screenshotDir, 'salima-engineer-mobile-report.png'), fullPage: true });
   await engineer.close();
@@ -359,8 +400,15 @@ async function assertMobileRecordsLayout(page) {
   assert.equal(await recordsOnlyEngineer.locator('#view-records').isVisible(), true, 'cancel must return a records-only user to records');
   await recordsOnlyEngineer.close();
 
+  const clockShiftedEngineer = await openScenario(browser, { role: 'engineer', size: 20, factoryToday: '2026-10-24', mockDate: '2020-01-08' });
+  const clockQuery = await clockShiftedEngineer.evaluate(() => window.__queryLog.find(entry => entry.table === 'production_records'));
+  assert(clockQuery.filters.some(filter => filter.operator === 'gte' && filter.key === 'production_date' && filter.value === '2026-10-24'), 'engineer week must use server Saturday despite an old device clock');
+  assert(clockQuery.filters.some(filter => filter.operator === 'lte' && filter.key === 'production_date' && filter.value === '2026-10-24'), 'engineer today must use the server calendar despite an old device clock');
+  assert.equal(await clockShiftedEngineer.locator('#prodDate').inputValue(), '2026-10-24', 'default production date must come from the server calendar');
+  await clockShiftedEngineer.close();
+
   await browser.close();
-  console.log('Desktop/mobile records layout, engineer weekly report, role scope, and >1000 pagination checks passed.');
+  console.log('Desktop/mobile layout, server calendar clock-shift, nylon reports, role scope, and >1000 pagination checks passed.');
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;

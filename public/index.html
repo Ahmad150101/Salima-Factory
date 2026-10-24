@@ -56,6 +56,7 @@
     </aside>
 
     <main class="main-content">
+        <div class="calendar-warning hidden" id="factoryCalendarWarning" role="alert">تعذر تحميل تاريخ المصنع من الخادم. يُستخدم تاريخ محلي مؤقت للعرض فقط، وتبقى صلاحيات قاعدة البيانات مانعة لأي تجاوز. أعد المحاولة بعد استعادة الاتصال.</div>
       <header class="topbar">
         <div class="topbar-title">
           <button class="mobile-menu" id="mobileMenu" aria-label="فتح القائمة">☰</button>
@@ -133,6 +134,11 @@
               <label>الوردية <span class="required-mark">*</span><select id="prodShift" required><option>صباحية</option><option>مسائية</option><option>ليلية</option></select></label>
               <label>الصنف <span class="required-mark">*</span><select id="prodProduct" required></select></label>
             </div>
+            <div class="empty-state production-products-empty hidden" id="productionProductsEmpty" role="status">
+              <strong>لا توجد أصناف مضافة</strong>
+              <p>يجب إضافة صنف قبل تسجيل الإنتاج.</p>
+              <button type="button" class="text-btn" data-go="products" data-action-control="products:create">الانتقال إلى إضافة صنف</button>
+            </div>
           </article>
 
           <article class="panel form-panel">
@@ -146,24 +152,11 @@
             <div class="inline-total">إجمالي وزن الرولات لليوم: <strong id="totalUsedWeight">0 كغم</strong></div>
           </article>
 
-          <article class="panel form-panel material-panel">
-            <div class="panel-head"><div class="title-with-step"><span class="step-number">03</span><h3>النايلون المستخدم</h3></div><span class="material-badge">مواد تعبئة</span></div>
-            <div class="form-grid cols-3">
-              <label>نايلون شفاف (كغم) <span class="required-mark">*</span><input type="number" id="transparentNylonWeight" min="0" step="0.01" placeholder="اكتب 0 عند عدم الاستخدام" required /></label>
-              <label>طريقة إدخال النايلون المطبوع <span class="required-mark">*</span><select id="printedNylonMode" required><option value="weight">بالوزن</option><option value="rolls">بعدد الرولات</option></select></label>
-              <label id="printedNylonWeightWrap">نايلون مطبوع (كغم) <span class="required-mark">*</span><input type="number" id="printedNylonWeight" min="0" step="0.01" placeholder="اكتب 0 عند عدم الاستخدام" required /></label>
-              <label id="printedNylonRollsWrap" class="hidden">نايلون مطبوع (عدد الرولات) <span class="required-mark">*</span><input type="number" id="printedNylonRolls" min="0" step="1" placeholder="اكتب 0 عند عدم الاستخدام" /></label>
-            </div>
-            <p class="calculation-note">النايلون الشفاف يُسجل بالوزن. النايلون المطبوع يمكن تسجيله بالوزن أو بعدد الرولات حسب المتوفر عند المهندس.</p>
-          </article>
-
           <article class="panel form-panel">
-            <div class="panel-head"><div class="title-with-step"><span class="step-number">04</span><h3>الإنتاج والتوالف</h3></div></div>
-            <div class="form-grid cols-4">
+            <div class="panel-head"><div class="title-with-step"><span class="step-number">03</span><h3>كمية الإنتاج</h3></div></div>
+            <div class="form-grid cols-2">
               <label>عدد المشاتيح <span class="required-mark">*</span><input type="number" id="palletsProduced" min="1" step="1" required /></label>
               <label>شوالات إضافية <span class="required-mark">*</span><input type="number" id="extraBags" min="0" step="1" placeholder="اكتب 0 عند عدم وجود شوالات إضافية" required /></label>
-              <label>التوالف (كغم) <span class="required-mark">*</span><input type="number" id="wasteWeight" min="0" step="0.01" placeholder="اكتب 0 عند عدم وجود توالف" required /></label>
-              <label>نوع التالف <span class="required-mark">*</span><select id="wasteType" required><option value="لا يوجد">لا يوجد</option><option>قص وتعديل</option><option>تالف تشغيل</option><option>تالف جودة</option><option>أخرى</option></select></label>
             </div>
 
             <div class="calc-card" id="packagingPreview">
@@ -174,6 +167,28 @@
               <div class="calc-highlight"><span>وزن الإنتاج</span><strong data-calc="weight">0 كغم</strong></div>
             </div>
             <p class="calculation-note" id="calculationNote"></p>
+          </article>
+
+          <article class="panel form-panel">
+            <div class="panel-head"><div class="title-with-step"><span class="step-number">04</span><h3>التوالف</h3></div></div>
+            <div class="form-grid cols-2">
+              <label>وزن التالف (كغم) <span class="required-mark">*</span><input type="number" id="wasteWeight" min="0" step="0.01" placeholder="اكتب 0 عند عدم وجود تالف" required /></label>
+              <label>نوع / وصف التالف<input type="text" id="wasteType" placeholder="مثال: قص أطراف أو مشكلة تشغيل" /></label>
+            </div>
+          </article>
+
+          <article class="panel form-panel material-panel nylon-panel">
+            <div class="panel-head"><div class="title-with-step"><span class="step-number">05</span><h3>النايلون الشفاف</h3></div><button type="button" class="secondary-btn" id="addTransparentNylonItem">+ إضافة شفاف</button></div>
+            <div class="table-scroll"><table class="data-table compact-table"><thead><tr><th>الاسم / النوع</th><th>الوزن (كغم)</th><th>العدد</th><th>إجراء</th></tr></thead><tbody id="transparentNylonRows"></tbody></table></div>
+          </article>
+
+          <article class="panel form-panel material-panel nylon-panel">
+            <div class="panel-head"><div class="title-with-step"><span class="step-number">06</span><h3>النايلون المطبوع</h3></div><button type="button" class="secondary-btn" id="addPrintedNylonItem">+ إضافة مطبوع</button></div>
+            <div class="table-scroll"><table class="data-table compact-table"><thead><tr><th>الاسم / النوع</th><th>الوزن (كغم)</th><th>العدد</th><th>إجراء</th></tr></thead><tbody id="printedNylonRows"></tbody></table></div>
+          </article>
+
+          <article class="panel form-panel">
+            <div class="panel-head"><div class="title-with-step"><span class="step-number">07</span><h3>الملاحظات</h3></div></div>
             <label class="full-label">ملاحظات التشغيل <span class="required-mark">*</span><textarea id="prodNotes" rows="3" placeholder="اكتب لا يوجد عند عدم وجود ملاحظات" required></textarea></label>
           </article>
 
@@ -242,11 +257,11 @@
           <form id="productForm">
             <input type="hidden" id="productEditId" />
             <div class="form-grid cols-5">
-              <label>اسم الصنف<input id="productName" required placeholder="مثال: محارم المنى" /></label>
+              <label>اسم الصنف<input id="productName" required placeholder="اسم الصنف" /></label>
               <label>شوال / مشتاح<input id="bagsPerPallet" type="number" min="1" required /></label>
               <label>حبة / شوال<input id="packsPerBag" type="number" min="1" required /></label>
               <label>حبة صغيرة / حبة<input id="unitsPerPack" type="number" min="1" required /></label>
-              <label>وزن الحبة الصغيرة (كغم)<input id="unitWeightKg" type="number" min="0.001" step="0.001" value="0.2" required /></label>
+              <label>وزن الحبة الصغيرة (كغم)<input id="unitWeightKg" type="number" min="0.001" step="0.001" required /></label>
             </div>
             <div class="form-actions inside-form"><button type="button" class="secondary-btn hidden" id="cancelProductEdit">إلغاء التعديل</button><button class="primary-btn" type="submit">حفظ الصنف</button></div>
           </form>
@@ -274,9 +289,10 @@
           <article class="stat-card"><span>وزن الإنتاج</span><strong id="reportProductionWeight">0</strong><small>كغم</small></article>
           <article class="stat-card"><span>المشاتيح</span><strong id="reportPallets">0</strong><small>مشتاح</small></article>
           <article class="stat-card"><span>التوالف</span><strong id="reportWaste">0</strong><small>كغم</small></article>
-          <article class="stat-card"><span>نايلون شفاف</span><strong id="reportTransparentNylon">0</strong><small>كغم</small></article>
-          <article class="stat-card"><span>نايلون مطبوع - وزن</span><strong id="reportPrintedNylonWeight">0</strong><small>كغم</small></article>
-          <article class="stat-card"><span>نايلون مطبوع - رولات</span><strong id="reportPrintedNylonRolls">0</strong><small>رولة</small></article>
+          <article class="stat-card"><span>شفاف - وزن</span><strong id="reportTransparentNylon">0</strong><small>كغم</small></article>
+          <article class="stat-card"><span>شفاف - عدد</span><strong id="reportTransparentNylonQuantity">0</strong><small>حبة</small></article>
+          <article class="stat-card"><span>مطبوع - وزن</span><strong id="reportPrintedNylonWeight">0</strong><small>كغم</small></article>
+          <article class="stat-card"><span>مطبوع - عدد</span><strong id="reportPrintedNylonQuantity">0</strong><small>حبة</small></article>
         </div>
 
         <article class="panel engineer-weekly-report hidden" id="engineerWeeklyReport" data-report-scope="engineer">
@@ -287,9 +303,12 @@
           <div class="stats-grid report-stats engineer-report-stats">
             <article class="stat-card" data-report-metric="pallets"><span>عدد المشاتيح المنتجة</span><strong id="engineerReportPallets">0</strong><small>مشتاح</small></article>
             <article class="stat-card" data-report-metric="production-weight"><span>وزن الإنتاج</span><strong id="engineerReportProductionWeight">0</strong><small>كغم</small></article>
-            <article class="stat-card" data-report-metric="printed-weight"><span>النايلون المطبوع</span><strong id="engineerReportPrintedNylonWeight">0</strong><small>كغم</small></article>
-            <article class="stat-card" data-report-metric="printed-rolls"><span>رولات النايلون المطبوع</span><strong id="engineerReportPrintedNylonRolls">0</strong><small>رولة</small></article>
+            <article class="stat-card" data-report-metric="transparent-weight"><span>الشفاف - وزن</span><strong id="engineerReportTransparentNylonWeight">0</strong><small>كغم</small></article>
+            <article class="stat-card" data-report-metric="transparent-quantity"><span>الشفاف - عدد</span><strong id="engineerReportTransparentNylonQuantity">0</strong><small>حبة</small></article>
+            <article class="stat-card" data-report-metric="printed-weight"><span>المطبوع - وزن</span><strong id="engineerReportPrintedNylonWeight">0</strong><small>كغم</small></article>
+            <article class="stat-card" data-report-metric="printed-quantity"><span>المطبوع - عدد</span><strong id="engineerReportPrintedNylonQuantity">0</strong><small>حبة</small></article>
           </div>
+          <div class="nylon-breakdowns"><div><h4>تفصيل الشفاف</h4><div id="engineerTransparentBreakdown"></div></div><div><h4>تفصيل المطبوع</h4><div id="engineerPrintedBreakdown"></div></div></div>
           <p class="empty-state hidden" id="engineerReportEmpty" role="status">لا يوجد إنتاج مسجل لهذا الأسبوع</p>
           <p class="info-note">يعرض هذا الملخص بياناتك المتاحة للأسبوع الحالي فقط وفق صلاحيات قاعدة البيانات.</p>
         </article>
@@ -300,7 +319,8 @@
             <div><h3>تقرير الإنتاج الأسبوعي</h3><p id="reportPeriodLabel"></p></div>
           </div>
           <div class="panel-head"><div><span class="eyebrow">يوميًا</span><h3>ملخص كل يوم</h3></div><div class="button-row"><button class="secondary-btn" id="exportWeeklyCsv" data-action-control="reports:export" type="button">تصدير CSV</button><button class="secondary-btn" id="printWeeklyReport" data-action-control="reports:print" type="button">طباعة / PDF</button></div></div>
-          <div class="table-scroll"><table class="data-table report-table"><thead><tr><th>اليوم / التاريخ</th><th>الأصناف</th><th>عدد الرولات</th><th>وزن الرولات</th><th>المشاتيح</th><th>وزن الإنتاج</th><th>شفاف كغم</th><th>مطبوع كغم</th><th>مطبوع رولات</th><th>التوالف</th></tr></thead><tbody id="weeklyDailyTable"></tbody><tfoot id="weeklyDailyFoot"></tfoot></table></div>
+          <div class="table-scroll"><table class="data-table report-table"><thead><tr><th>اليوم / التاريخ</th><th>الأصناف</th><th>عدد الرولات</th><th>وزن الرولات</th><th>المشاتيح</th><th>وزن الإنتاج</th><th>شفاف وزن / عدد</th><th>مطبوع وزن / عدد</th><th>التوالف</th></tr></thead><tbody id="weeklyDailyTable"></tbody><tfoot id="weeklyDailyFoot"></tfoot></table></div>
+          <div class="nylon-breakdowns report-section"><div><h4>تفصيل النايلون الشفاف</h4><div id="managementTransparentBreakdown"></div></div><div><h4>تفصيل النايلون المطبوع</h4><div id="managementPrintedBreakdown"></div></div></div>
           <div class="report-section"><h4>تفصيل حسب الصنف</h4><div class="table-scroll"><table class="data-table"><thead><tr><th>الصنف</th><th>المشاتيح</th><th>الشوالات</th><th>الحبات</th><th>الحبات الصغيرة</th><th>وزن الإنتاج</th></tr></thead><tbody id="weeklyProductTable"></tbody></table></div></div>
         </article>
 
