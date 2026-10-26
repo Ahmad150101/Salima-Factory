@@ -143,10 +143,19 @@
     try { localStorage.setItem(CACHE_KEY, JSON.stringify(state)); } catch (_) {}
   }
 
-  function setAuthMessage(message, isError = false) {
+  function setAuthMessage(message, isError = false, isLoading = false) {
     if (!els.authMessage) return;
     els.authMessage.textContent = message;
     els.authMessage.classList.toggle('error', !!isError);
+    els.authMessage.classList.toggle('loading', !!isLoading);
+  }
+
+  function withTimeout(promise, timeoutMs, message) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
   }
 
   function ensureCloudConfig() {
@@ -387,25 +396,39 @@
     els.authScreen.classList.remove('hidden');
     if (presenceTimer) clearInterval(presenceTimer);
     setAuthMessage('أدخل اسم المستخدم وكلمة المرور.');
+    els.loginBtn.disabled = false;
   }
 
   async function handleLogin(event) {
     event.preventDefault();
-    if (!db) return;
+    if (!db) return setAuthMessage('الاتصال غير جاهز. أعد تحميل الصفحة وحاول مرة أخرى.', true);
     els.loginBtn.disabled = true;
-    setAuthMessage('جاري تسجيل الدخول...');
+    els.loginBtn.classList.add('is-loading');
+    setAuthMessage('جاري تسجيل الدخول...', false, true);
     const username = els.loginUsername.value.trim().toLowerCase();
     if (!/^[a-z0-9_]{3,30}$/.test(username)) {
       els.loginBtn.disabled = false;
+      els.loginBtn.classList.remove('is-loading');
       return setAuthMessage('اسم المستخدم أو كلمة المرور غير صحيحة', true);
     }
-    const { data, error } = await db.functions.invoke('login-by-username', { body: { username, password: els.loginPassword.value } });
-    els.loginBtn.disabled = false;
-    if (error || data?.error || !data?.access_token || !data?.refresh_token) return setAuthMessage('اسم المستخدم أو كلمة المرور غير صحيحة', true);
-    const { data: sessionData, error: sessionError } = await db.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token });
-    if (sessionError) return setAuthMessage('اسم المستخدم أو كلمة المرور غير صحيحة', true);
-    await activateSession(sessionData.session);
-    els.loginForm.reset();
+    try {
+      const { data, error } = await withTimeout(
+        db.functions.invoke('login-by-username', { body: { username, password: els.loginPassword.value } }),
+        15000,
+        'انتهت مهلة الاتصال'
+      );
+      if (error || data?.error || !data?.access_token || !data?.refresh_token) return setAuthMessage('اسم المستخدم أو كلمة المرور غير صحيحة', true);
+      const { data: sessionData, error: sessionError } = await db.auth.setSession({ access_token: data.access_token, refresh_token: data.refresh_token });
+      if (sessionError) return setAuthMessage('اسم المستخدم أو كلمة المرور غير صحيحة', true);
+      await activateSession(sessionData.session);
+      els.loginForm.reset();
+    } catch (error) {
+      console.error('Login initialization failed', error);
+      setAuthMessage('تعذر الاتصال بالخدمة. تحقق من الإنترنت ثم حاول مجددًا.', true);
+    } finally {
+      els.loginBtn.disabled = false;
+      els.loginBtn.classList.remove('is-loading');
+    }
   }
 
   async function handleLogout() {
@@ -472,13 +495,22 @@
   async function initCloud() {
     const cfg = ensureCloudConfig();
     if (!cfg) return;
-    db = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
-    const { data: { session } } = await db.auth.getSession();
-    if (session) await activateSession(session); else showLogin();
-    db.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') showLogin();
-      if (event === 'TOKEN_REFRESHED' && session) currentUser = { ...(currentUser || {}), ...session.user };
-    });
+    try {
+      setAuthMessage('جاري تجهيز الاتصال...', false, true);
+      db = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+      const { data: { session }, error } = await withTimeout(db.auth.getSession(), 12000, 'Session initialization timeout');
+      if (error) throw error;
+      if (session) await activateSession(session); else showLogin();
+      db.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_OUT') showLogin();
+        if (event === 'TOKEN_REFRESHED' && session) currentUser = { ...(currentUser || {}), ...session.user };
+      });
+    } catch (error) {
+      console.error('Cloud initialization failed', error);
+      db = null;
+      els.loginBtn.disabled = true;
+      setAuthMessage('تعذر تهيئة الاتصال. تحقق من الإنترنت ثم أعد تحميل الصفحة.', true);
+    }
   }
 
   async function dbUpsertProduct(product) {
@@ -656,6 +688,12 @@
     return calculateOutput(recordProduct(record), record.pallets, record.extraBags);
   }
 
+  function closeMobileNavigation() {
+    els.sidebar.classList.remove('open');
+    $('#mobileMenu')?.setAttribute('aria-expanded', 'false');
+    document.body.classList.remove('nav-open');
+  }
+
   function navigate(view) {
     if (view !== 'no-access' && !canOpenView(view)) view = firstAllowedPage();
     $$('.view').forEach(el => el.classList.toggle('active', el.id === `view-${view}`));
@@ -665,7 +703,7 @@
       : (viewMeta[view] || viewMeta.dashboard);
     els.pageEyebrow.textContent = eyebrow;
     els.pageTitle.textContent = title;
-    els.sidebar.classList.remove('open');
+    closeMobileNavigation();
     if (view === 'reports') renderReports();
     if (view === 'records') renderRecords();
     if (view === 'shipments') renderShipments();
@@ -739,8 +777,9 @@
     const tbody = kind === 'transparent' ? els.transparentNylonRows : els.printedNylonRows;
     const tr = document.createElement('tr');
     tr.innerHTML = `<td><input class="nylon-item-name" type="text" placeholder="الاسم / النوع" value="${escapeAttr(data.name || data.type || '')}" /></td><td><input class="nylon-item-weight" type="number" min="0" step="0.01" placeholder="0" value="${data.weight_kg ?? ''}" /></td><td><input class="nylon-item-quantity" type="number" min="0" step="1" placeholder="0" value="${data.quantity ?? ''}" /></td><td><button type="button" class="remove-row" aria-label="حذف السطر">✕</button></td>`;
-    $('.remove-row', tr).addEventListener('click', () => tr.remove());
+    $('.remove-row', tr).addEventListener('click', () => { tr.remove(); updateProductionWorkspaceSummary(); });
     tbody.appendChild(tr);
+    updateProductionWorkspaceSummary();
   }
 
   function readNylonItemRows(kind) {
@@ -773,9 +812,49 @@
     })).filter(r => r.code || r.weight || r.note);
   }
 
+  function productionDraftNylonTotals(kind) {
+    const tbody = kind === 'transparent' ? els.transparentNylonRows : els.printedNylonRows;
+    return $$('tr', tbody).reduce((totals, row) => {
+      const weight = Number($('.nylon-item-weight', row)?.value || 0);
+      const quantity = Number($('.nylon-item-quantity', row)?.value || 0);
+      if (Number.isFinite(weight) && weight >= 0) totals.weight += weight;
+      if (Number.isFinite(quantity) && quantity >= 0) totals.quantity += quantity;
+      return totals;
+    }, { weight: 0, quantity: 0 });
+  }
+
+  function setProductionModeCopy(isEditing) {
+    els.productionFormTitle.textContent = isEditing ? 'تعديل سجل الإنتاج' : 'تسجيل الإنتاج اليومي';
+    $('#productionModeLabel').textContent = isEditing ? 'وضع التعديل' : 'سجل جديد';
+    const saveLabel = $('span', els.saveProductionBtn);
+    if (saveLabel) saveLabel.textContent = isEditing ? 'حفظ التعديل' : 'حفظ إنتاج اليوم';
+  }
+
+  function updateProductionWorkspaceSummary() {
+    const rolls = getProductionRollRows();
+    const rawWeight = sum(rolls, roll => roll.weight);
+    const output = calculateOutput(productionFormProduct(), els.palletsProduced.value, els.extraBags.value);
+    const transparent = productionDraftNylonTotals('transparent');
+    const printed = productionDraftNylonTotals('printed');
+    const waste = Number(els.wasteWeight.value || 0);
+    $('#productionHeaderDate').textContent = formatDate(els.prodDate.value || factoryCalendar?.today || isoToday(), true);
+    $('#productionHeaderShift').textContent = els.prodShift.value || '—';
+    $('#summaryRollCount').textContent = num(rolls.length);
+    $('#summaryRawWeight').textContent = num(rawWeight, 2);
+    $('#summaryPallets').textContent = num(output.pallets);
+    $('#summaryOutputWeight').textContent = num(output.weightKg, 2);
+    $('#summaryTransparentNylon').textContent = `${num(transparent.weight, 2)} كغم · ${num(transparent.quantity)} حبة`;
+    $('#summaryPrintedNylon').textContent = `${num(printed.weight, 2)} كغم · ${num(printed.quantity)} حبة`;
+    $('#summaryWaste').textContent = num(Number.isFinite(waste) && waste >= 0 ? waste : 0, 2);
+    $('#productionSummaryStatus').textContent = productionFormProduct() && els.prodDate.value && els.prodShift.value
+      ? 'الملخص محدّث من المدخلات'
+      : 'بانتظار اكتمال بيانات التشغيل';
+  }
+
   function updateRawTotal() {
     const total = sum(getProductionRollRows(), r => r.weight);
     els.totalUsedWeight.textContent = `${num(total, 2)} كغم`;
+    updateProductionWorkspaceSummary();
   }
 
   function updateProductionCalculation() {
@@ -793,6 +872,7 @@
     } else {
       els.calculationNote.textContent = '';
     }
+    updateProductionWorkspaceSummary();
   }
 
   function resetProductionForm() {
@@ -807,8 +887,7 @@
     els.prodNotes.value = '';
     els.productionRollRows.innerHTML = '';
     addProductionRollRow();
-    els.productionFormTitle.textContent = 'تسجيل الإنتاج اليومي';
-    els.saveProductionBtn.textContent = 'حفظ إنتاج اليوم';
+    setProductionModeCopy(false);
     els.cancelProductionEdit.classList.add('hidden');
     renderProductOptions();
     updateRawTotal();
@@ -1021,8 +1100,7 @@
     els.wasteWeight.value = r.wasteWeight || 0;
     els.wasteType.value = r.wasteType || '';
     els.prodNotes.value = r.notes || '';
-    els.productionFormTitle.textContent = 'تعديل سجل الإنتاج';
-    els.saveProductionBtn.textContent = 'حفظ التعديل';
+    setProductionModeCopy(true);
     els.cancelProductionEdit.classList.remove('hidden');
     updateRawTotal();
     updateProductionCalculation();
@@ -1129,10 +1207,20 @@
     const rawToday = sum(todayRecords, recordRawWeight);
     const prodToday = sum(todayRecords, r => recordOutput(r).weightKg);
     const wasteToday = sum(todayRecords, r => r.wasteWeight);
+    const weekRange = currentWeekRange();
+    const weekRecords = state.production.filter(r => r.date >= weekRange.from && r.date <= weekRange.today);
+    const weekProduction = sum(weekRecords, r => recordOutput(r).weightKg);
     $('#statProductionWeight').textContent = num(prodToday, 2);
     $('#statRawWeight').textContent = num(rawToday, 2);
     $('#statWaste').textContent = num(wasteToday, 2);
     $('#statWasteFoot').textContent = `${rawToday ? num(wasteToday / rawToday * 100, 2) : '0'}% من وزن الرولات`;
+    $('#statWeeklyProduction').textContent = num(weekProduction, 2);
+    $('#statWeeklyProductionFoot').textContent = `من ${formatDate(weekRange.from)} إلى ${formatDate(weekRange.today)}`;
+    $('#dashboardFactoryDate').textContent = formatDate(today, true);
+    $('#dashboardOperationalSummary').textContent = todayRecords.length
+      ? `تم تسجيل ${num(todayRecords.length)} ${todayRecords.length === 1 ? 'عملية إنتاج' : 'عمليات إنتاج'} اليوم بوزن ${num(prodToday, 2)} كغم.`
+      : 'لا توجد عمليات إنتاج مسجلة اليوم. يمكنك متابعة آخر السجلات والمؤشرات أدناه.';
+    $('.dashboard-secondary-kpis')?.classList.toggle('hidden', currentRole === 'engineer');
 
     const totalInbound = sum(state.shipments, s => s.totalWeight);
     const totalRaw = sum(state.production, recordRawWeight);
@@ -1141,6 +1229,7 @@
     $('#statBalanceFoot').textContent = `${num(totalInbound, 2)} وارد − ${num(totalRaw, 2)} مستخدم`;
 
     renderSevenDayChart();
+    renderProductBreakdown(weekRecords);
     renderRecentProduction();
     renderMonthlyInboundSummary();
     renderWeeklySummary();
@@ -1159,21 +1248,52 @@
 
   function renderSevenDayChart() {
     const days = [];
-    const now = new Date();
+    const now = new Date(`${isoToday()}T12:00:00`);
     now.setHours(12,0,0,0);
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
       const iso = dateToIso(d);
       const total = sum(state.production.filter(r => r.date === iso), r => recordOutput(r).weightKg);
-      days.push({ iso, total, label: new Intl.DateTimeFormat('ar-PS', { weekday: 'short' }).format(d) });
+      days.push({ iso, total, label: new Intl.DateTimeFormat('ar-PS', { weekday: 'short' }).format(d), dateLabel: new Intl.DateTimeFormat('ar-PS', { day: '2-digit', month: '2-digit' }).format(d) });
+    }
+    const chartTotal = sum(days, d => d.total);
+    if (!chartTotal) {
+      $('#productionChart').innerHTML = `<div class="dashboard-chart-empty"><span class="empty-chart-icon"><svg><use href="#icon-reports"></use></svg></span><strong>لا توجد بيانات إنتاج خلال آخر 7 أيام</strong><small>سيظهر الأداء هنا تلقائيًا بعد تسجيل الإنتاج.</small></div>`;
+      return;
     }
     const max = Math.max(1, ...days.map(d => d.total));
     $('#productionChart').innerHTML = days.map(d => `
-      <div class="bar-col">
+      <div class="bar-col" title="${escapeAttr(`${formatDate(d.iso)}: ${num(d.total, 2)} كغم`)}">
         <span class="bar-value">${num(d.total, 0)}</span>
-        <div class="bar-track"><div class="bar-fill" style="height:${Math.max(d.total ? 4 : 1, d.total / max * 100)}%"></div></div>
-        <span class="bar-label">${escapeHtml(d.label)}</span>
+        <div class="bar-track"><div class="bar-fill" style="height:${Math.max(d.total ? 5 : 1, d.total / max * 100)}%"></div></div>
+        <span class="bar-label"><b>${escapeHtml(d.label)}</b><small>${escapeHtml(d.dateLabel)}</small></span>
+      </div>`).join('');
+  }
+
+  function renderProductBreakdown(records) {
+    const target = $('#productBreakdown');
+    if (!target) return;
+    const totals = new Map();
+    records.forEach(record => {
+      const product = recordProduct(record) || { id: record.productId || 'unavailable', name: 'صنف غير متاح' };
+      const key = product.id || product.name;
+      const current = totals.get(key) || { name: product.name, weight: 0, records: 0 };
+      current.weight += recordOutput(record).weightKg;
+      current.records += 1;
+      totals.set(key, current);
+    });
+    const rows = [...totals.values()].sort((a, b) => b.weight - a.weight);
+    if (!rows.length) {
+      target.innerHTML = `<div class="dashboard-compact-empty"><span class="empty-chart-icon"><svg><use href="#icon-products"></use></svg></span><div><strong>لا يوجد إنتاج مسجل هذا الأسبوع</strong><small>سيظهر توزيع الأصناف عند توفر سجلات ضمن الفترة الحالية.</small></div></div>`;
+      return;
+    }
+    const maxWeight = Math.max(1, ...rows.map(row => row.weight));
+    target.innerHTML = rows.slice(0, 6).map((row, index) => `
+      <div class="product-breakdown-row">
+        <span class="product-rank">${String(index + 1).padStart(2, '0')}</span>
+        <div class="product-breakdown-main"><div><strong>${escapeHtml(row.name)}</strong><small>${num(row.records)} سجل</small></div><span class="product-breakdown-track"><i style="width:${Math.max(4, row.weight / maxWeight * 100)}%"></i></span></div>
+        <strong class="product-breakdown-value">${num(row.weight, 2)}<small>كغم</small></strong>
       </div>`).join('');
   }
 
@@ -1647,7 +1767,12 @@
   function bindEvents() {
     $$('.nav-item').forEach(btn => btn.addEventListener('click', () => navigate(btn.dataset.view)));
     $$('[data-go]').forEach(btn => btn.addEventListener('click', () => navigate(btn.dataset.go)));
-    $('#mobileMenu').addEventListener('click', () => els.sidebar.classList.toggle('open'));
+    $('#mobileMenu').addEventListener('click', () => {
+      const open = els.sidebar.classList.toggle('open');
+      $('#mobileMenu').setAttribute('aria-expanded', String(open));
+      document.body.classList.toggle('nav-open', open);
+    });
+    $('#sidebarBackdrop')?.addEventListener('click', closeMobileNavigation);
     els.themeToggle.addEventListener('click', toggleTheme);
     els.loginForm.addEventListener('submit', handleLogin);
     els.logoutBtn.addEventListener('click', handleLogout);
@@ -1658,6 +1783,8 @@
     els.prodProduct.addEventListener('change', updateProductionCalculation);
     els.palletsProduced.addEventListener('input', updateProductionCalculation);
     els.extraBags.addEventListener('input', updateProductionCalculation);
+    els.productionForm.addEventListener('input', updateProductionWorkspaceSummary);
+    els.productionForm.addEventListener('change', updateProductionWorkspaceSummary);
     els.productionForm.addEventListener('submit', saveProduction);
     $('#clearProductionForm').addEventListener('click', clearProductionFormAndRestoreView);
     els.cancelProductionEdit.addEventListener('click', clearProductionFormAndRestoreView);

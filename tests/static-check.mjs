@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
@@ -14,6 +15,7 @@ const appsScript = readFileSync(new URL('../backup/google-apps-script.gs', impor
 const testSeed = readFileSync(new URL('../backup/seed-test-data.sql', import.meta.url), 'utf8');
 const testCleanup = readFileSync(new URL('../backup/cleanup-test-data.sql', import.meta.url), 'utf8');
 const legacyPagesWorkflow = new URL('../.github/workflows/pages.yml', import.meta.url);
+const logo = readFileSync(new URL('../public/assets/salima-logo.png', import.meta.url));
 
 const pages = ['dashboard', 'production', 'shipments', 'products', 'reports', 'records', 'users', 'activity', 'system'];
 const actions = ['view', 'create', 'update', 'delete', 'export', 'print'];
@@ -57,6 +59,12 @@ assert.match(html, /id="refreshEngineerWeeklyReport"[^>]*>\s*عرض تقرير �
 assert.match(html, /id="engineerReportEmpty"[^>]*>\s*لا يوجد إنتاج مسجل لهذا الأسبوع\s*</, 'engineer empty-week message is missing');
 assert.match(html, /class="records-scope"/, 'records scope wrapper is missing');
 assert.match(html, /id="productionProductsEmpty"/, 'production form empty-products guidance is missing');
+assert.match(html, /class="production-workspace"/, 'premium production workspace is missing');
+for (const id of ['productionModeLabel', 'productionHeaderDate', 'productionHeaderShift', 'summaryOutputWeight', 'summaryRollCount', 'summaryRawWeight', 'summaryPallets', 'summaryTransparentNylon', 'summaryPrintedNylon', 'summaryWaste']) {
+  assert.match(html, new RegExp(`id="${id}"`), `production live summary is missing ${id}`);
+}
+assert.ok(html.indexOf('id="transparentNylonRows"') < html.indexOf('id="wasteWeight"'), 'waste section must follow transparent and printed nylon sections');
+assert.equal(createHash('sha256').update(logo).digest('hex').toUpperCase(), 'E2AF74796926A2792BB3745B7216A9D0708125726B97FF5BE2AE2EB66F17E46B', 'original Salima logo bytes changed');
 assert.match(html, /id="productName"[^>]*placeholder="اسم الصنف"|placeholder="اسم الصنف"[^>]*id="productName"/, 'product name placeholder must be generic');
 assert.doesNotMatch(html, /id="unitWeightKg"[^>]*\bvalue\s*=\s*["']0\.2["']|\bvalue\s*=\s*["']0\.2["'][^>]*id="unitWeightKg"/, 'unit weight must not have a factory default');
 for (const metric of ['pallets', 'production-weight', 'transparent-weight', 'transparent-quantity', 'printed-weight', 'printed-quantity']) {

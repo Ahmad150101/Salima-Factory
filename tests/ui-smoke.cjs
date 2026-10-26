@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { mkdirSync } = require('node:fs');
 const { join } = require('node:path');
 const { chromium } = require('playwright');
+const { GREEN_LOGO_FILTER, installLocalBrowserRoutes } = require('./local-browser.cjs');
 
 const appUrl = process.env.SALIMA_TEST_URL || 'http://127.0.0.1:4173';
 const chromePath = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
@@ -201,6 +202,9 @@ const supabaseStub = String.raw`
 
 async function openScenario(browser, { role, size = 1005, recordsOnly = false, emptyWeek = false, factoryToday = '', mockDate = '', viewport = { width: 1440, height: 900 } }) {
   const page = await browser.newPage({ viewport, locale: 'ar' });
+  page.__salimaErrors = [];
+  page.on('console', message => { if (message.type() === 'error') page.__salimaErrors.push(message.text()); });
+  page.on('pageerror', error => page.__salimaErrors.push(error.message));
   if (mockDate) await page.addInitScript(value => {
     const NativeDate = Date;
     class MockDate extends NativeDate {
@@ -209,7 +213,7 @@ async function openScenario(browser, { role, size = 1005, recordsOnly = false, e
     }
     window.Date = MockDate;
   }, mockDate);
-  await page.route('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4', route => route.fulfill({ status: 200, contentType: 'application/javascript', body: supabaseStub }));
+  await installLocalBrowserRoutes(page, appUrl, supabaseStub);
   const query = new URLSearchParams({ role, size: String(size) });
   if (recordsOnly) query.set('recordsOnly', '1');
   if (emptyWeek) query.set('emptyWeek', '1');
@@ -219,11 +223,17 @@ async function openScenario(browser, { role, size = 1005, recordsOnly = false, e
   return page;
 }
 
+function assertNoPageErrors(page, label) {
+  assert.deepEqual(page.__salimaErrors, [], `${label} emitted browser errors`);
+  assert.deepEqual(page.__unexpectedRequests, [], `${label} attempted an unapproved network request`);
+}
+
 async function assertDateFilter(page, expectedTotal) {
   await page.locator('[data-view="records"]').click();
   await page.locator('#recordDateFilter').fill('2024-01-15');
   await page.locator('#recordDateFilter').dispatchEvent('change');
   assert.equal(await page.locator('#recordsTable > tr').count(), 1, 'date filter must show one day only');
+  await page.locator('#recordsTable summary').click();
   assert.match(await page.locator('#recordsTable').innerText(), /ROLL-0/);
   await page.locator('#recordSearch').fill('ROLL-1');
   assert.equal(await page.locator('#recordsTable .empty-state').isVisible(), true, 'text search must combine with date filter');
@@ -264,11 +274,59 @@ async function assertMobileRecordsLayout(page) {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'mobile records page overflows horizontally');
 }
 
-(async () => {
+async function assertDashboardViewport(page, width) {
+  await page.setViewportSize({ width, height: 844 });
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.locator('#appShell:not(.hidden)').waitFor({ state: 'visible' });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, `dashboard overflows horizontally at ${width}px`);
+  for (const selector of ['.dashboard-executive', '.dashboard-primary-kpi', '.dashboard-chart-panel', '.recent-production-panel']) {
+    assert.equal(await page.locator(selector).evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      return rect.left >= -1 && rect.right <= innerWidth + 1;
+    }), true, `${selector} exceeds the ${width}px dashboard viewport`);
+  }
+}
+
+async function openProductionView(page) {
+  if (await page.locator('#mobileMenu').isVisible()) await page.locator('#mobileMenu').click();
+  await page.locator('[data-view="production"]').click();
+  await page.locator('#view-production.active').waitFor({ state: 'visible' });
+  await page.waitForTimeout(300);
+}
+
+async function assertProductionViewport(page, width) {
+  await page.setViewportSize({ width, height: 844 });
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.locator('#appShell:not(.hidden)').waitFor({ state: 'visible' });
+  await openProductionView(page);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, `production page overflows horizontally at ${width}px`);
+  assert.equal(await page.locator('#pageTitle').evaluate(element => element.scrollWidth <= element.clientWidth + 1), true, `production title is cut off at ${width}px`);
+  for (const selector of ['.production-executive-header', '.production-live-summary', '.production-form-sections']) {
+    assert.equal(await page.locator(selector).evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      return rect.left >= -1 && rect.right <= innerWidth + 1;
+    }), true, `${selector} exceeds the ${width}px production viewport`);
+  }
+}
+
+if (require.main === module) (async () => {
   const browser = await chromium.launch({ executablePath: chromePath, headless: true });
+  try {
 
   const owner = await openScenario(browser, { role: 'owner', size: 1005 });
   assert.equal(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'owner desktop page overflows horizontally');
+  assert.equal(await owner.locator('.dashboard-critical-kpis .dashboard-kpi-card').count(), 3, 'dashboard must keep three critical KPIs beside the primary production KPI');
+  assert.equal(await owner.locator('.dashboard-chart-empty').isVisible(), true, 'a period without production must show the compact chart empty state');
+  assert.deepEqual(await owner.locator('.brand-logo').evaluate(element => ({ filter: getComputedStyle(element).filter, opacity: getComputedStyle(element).opacity, loaded: element.complete && element.naturalWidth > 0 })), { filter: GREEN_LOGO_FILTER, opacity: '1', loaded: true }, 'original Salima logo must use the authorized green treatment without changing opacity');
+  if (screenshotDir) await owner.screenshot({ path: join(screenshotDir, 'salima-phase2-dashboard-desktop-light.png'), fullPage: true });
+  await owner.locator('#themeToggle').click();
+  assert.equal(await owner.locator('html').getAttribute('data-theme'), 'night', 'theme toggle must enable night mode');
+  assert.deepEqual(await owner.locator('.brand-logo').evaluate(element => ({ filter: getComputedStyle(element).filter, opacity: getComputedStyle(element).opacity })), { filter: GREEN_LOGO_FILTER, opacity: '1' }, 'night mode must preserve the authorized green Salima logo treatment');
+  assert.equal(await owner.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'night mode page overflows horizontally');
+  await owner.waitForTimeout(250);
+  if (screenshotDir) await owner.screenshot({ path: join(screenshotDir, 'salima-phase2-dashboard-desktop-dark.png'), fullPage: true });
+  await owner.locator('#themeToggle').click();
+  await owner.waitForTimeout(250);
   assert.equal(await owner.locator('[data-view="users"]').isVisible(), true);
   const ownerRanges = await owner.evaluate(() => Object.fromEntries(['production_records', 'shipments'].map(table => [table, window.__queryLog.filter(entry => entry.table === table && entry.operation === 'select').map(entry => entry.range)])));
   assert.deepEqual(ownerRanges.production_records, [[0, 499], [500, 999], [1000, 1499]], 'production pagination must pass 1000 rows');
@@ -290,10 +348,109 @@ async function assertMobileRecordsLayout(page) {
   assert.equal(await owner.locator('[data-permission-page]:not(:checked)').count(), 0, 'owner permissions must all be checked');
   assert.equal(await owner.locator('[data-permission-page]:not(:disabled)').count(), 0, 'owner permissions must all be locked');
   await owner.locator('#permissionsDialog button[value="cancel"]').click();
+  assertNoPageErrors(owner, 'owner scenario');
   await owner.close();
+
+  const populatedDashboard = await openScenario(browser, { role: 'owner', size: 30, factoryToday: '2024-02-10' });
+  assert.notEqual((await populatedDashboard.locator('#statProductionWeight').innerText()).trim(), '0.00', 'populated dashboard must show today production from existing records');
+  assert.notEqual((await populatedDashboard.locator('#statWeeklyProduction').innerText()).trim(), '0.00', 'populated dashboard must show current-week production from existing records');
+  assert.equal(await populatedDashboard.locator('.dashboard-chart-empty').count(), 0, 'populated dashboard must render the weekly bars');
+  assert.equal(await populatedDashboard.locator('#productBreakdown .product-breakdown-row').count() > 0, true, 'populated dashboard must render product breakdown rows');
+  if (screenshotDir) await populatedDashboard.screenshot({ path: join(screenshotDir, 'salima-phase2-dashboard-desktop-populated.png'), fullPage: true });
+  assertNoPageErrors(populatedDashboard, 'populated dashboard scenario');
+  await populatedDashboard.close();
+
+  const mobileDashboard = await openScenario(browser, { role: 'engineer', size: 20, factoryToday: '2026-10-24', viewport: { width: 390, height: 844 } });
+  for (const width of [360, 390, 430]) await assertDashboardViewport(mobileDashboard, width);
+  await assertDashboardViewport(mobileDashboard, 390);
+  if (screenshotDir) await mobileDashboard.screenshot({ path: join(screenshotDir, 'salima-phase2-dashboard-mobile-390-light.png'), fullPage: true });
+  await mobileDashboard.locator('#themeToggle').click();
+  await mobileDashboard.waitForTimeout(250);
+  assert.equal(await mobileDashboard.locator('html').getAttribute('data-theme'), 'night');
+  assert.equal(await mobileDashboard.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'mobile dark dashboard overflows horizontally');
+  if (screenshotDir) await mobileDashboard.screenshot({ path: join(screenshotDir, 'salima-phase2-dashboard-mobile-390-dark.png'), fullPage: true });
+  assertNoPageErrors(mobileDashboard, 'mobile dashboard scenario');
+  await mobileDashboard.close();
+
+  const emptyDashboard = await openScenario(browser, { role: 'engineer', size: 20, emptyWeek: true });
+  assert.equal(await emptyDashboard.locator('.dashboard-chart-empty').isVisible(), true);
+  assert.equal(await emptyDashboard.locator('.dashboard-compact-empty').isVisible(), true);
+  if (screenshotDir) await emptyDashboard.screenshot({ path: join(screenshotDir, 'salima-v3-dashboard-empty.png'), fullPage: true });
+  assertNoPageErrors(emptyDashboard, 'empty dashboard scenario');
+  await emptyDashboard.close();
+
+  const production = await openScenario(browser, { role: 'owner', size: 30, factoryToday: '2024-02-10' });
+  await openProductionView(production);
+  assert.equal(await production.locator('.production-section').count(), 7, 'production workspace must keep seven operational groups');
+  assert.equal((await production.locator('#productionModeLabel').innerText()).trim(), 'سجل جديد', 'new production mode must be explicit');
+  assert.notEqual((await production.locator('#productionHeaderDate').innerText()).trim(), '—', 'production header must show the factory date');
+  assert.equal(await production.locator('.production-live-summary').isVisible(), true, 'live production summary must be visible');
+  if (screenshotDir) await production.screenshot({ path: join(screenshotDir, 'salima-phase2-production-desktop-light.png'), fullPage: true });
+  await production.locator('#themeToggle').click();
+  await production.waitForTimeout(200);
+  assert.equal(await production.locator('html').getAttribute('data-theme'), 'night');
+  if (screenshotDir) await production.screenshot({ path: join(screenshotDir, 'salima-phase2-production-desktop-dark.png'), fullPage: true });
+  await production.locator('#themeToggle').click();
+
+  assert.equal(await production.locator('#productionRollRows tr').count(), 1, 'new production must start with one roll row');
+  await production.locator('#addRollRow').click();
+  assert.equal(await production.locator('#productionRollRows tr').count(), 2, 'add roll must keep working');
+  await production.locator('#productionRollRows tr').last().locator('.remove-row').click();
+  assert.equal(await production.locator('#productionRollRows tr').count(), 1, 'remove roll must keep working without removing the final entry row');
+  await production.locator('#addTransparentNylonItem').click();
+  assert.equal(await production.locator('#transparentNylonRows tr').count(), 1, 'add transparent nylon must keep working');
+  await production.locator('#transparentNylonRows .remove-row').click();
+  assert.equal(await production.locator('#transparentNylonRows tr').count(), 0, 'remove transparent nylon must keep working');
+
+  await production.locator('.roll-code').fill('PHASE2-ROLL');
+  await production.locator('.roll-weight').fill('25.5');
+  await production.locator('#palletsProduced').fill('2');
+  await production.locator('#extraBags').fill('1');
+  await production.locator('#wasteWeight').fill('0.75');
+  await production.locator('#wasteType').fill('قص أطراف');
+  await production.locator('#prodNotes').fill('معاينة واجهة المرحلة الثانية');
+  await production.locator('#addTransparentNylonItem').click();
+  await production.locator('#transparentNylonRows .nylon-item-name').fill('شفاف معاينة');
+  await production.locator('#transparentNylonRows .nylon-item-weight').fill('4.25');
+  await production.locator('#transparentNylonRows .nylon-item-quantity').fill('3');
+  await production.locator('#addPrintedNylonItem').click();
+  await production.locator('#printedNylonRows .nylon-item-name').fill('مطبوع معاينة');
+  await production.locator('#printedNylonRows .nylon-item-weight').fill('2');
+  await production.locator('#printedNylonRows .nylon-item-quantity').fill('2');
+  const calculatedOutput = (await production.locator('[data-calc="weight"]').innerText()).replace(/\s*كغم\s*/, '').trim();
+  assert.equal((await production.locator('#summaryOutputWeight').innerText()).trim(), calculatedOutput, 'live summary must reuse the existing calculated production output');
+  assert.match(await production.locator('#summaryTransparentNylon').innerText(), /4[٫.]25|٤[٫.]٢٥/, 'live summary must reflect transparent nylon input');
+  await production.evaluate(() => window.scrollTo(0, 0));
+  await production.waitForTimeout(250);
+  if (screenshotDir) await production.screenshot({ path: join(screenshotDir, 'salima-phase2-production-populated.png'), fullPage: true });
+
+  await production.locator('[data-view="records"]').click();
+  await production.locator('[data-edit-production]').first().click();
+  assert.equal((await production.locator('#productionModeLabel').innerText()).trim(), 'وضع التعديل', 'editing mode must be explicit');
+  assert.equal((await production.locator('#saveProductionBtn').innerText()).trim().includes('حفظ التعديل'), true, 'editing mode must use a clear save label');
+  await production.evaluate(() => window.scrollTo(0, 0));
+  await production.waitForTimeout(250);
+  if (screenshotDir) await production.screenshot({ path: join(screenshotDir, 'salima-phase2-production-editing-existing.png'), fullPage: true });
+  assertNoPageErrors(production, 'desktop production scenario');
+  await production.close();
+
+  const mobileProduction = await openScenario(browser, { role: 'engineer', size: 20, factoryToday: '2026-10-24', viewport: { width: 390, height: 844 } });
+  for (const width of [360, 390, 430]) await assertProductionViewport(mobileProduction, width);
+  await assertProductionViewport(mobileProduction, 390);
+  if (screenshotDir) await mobileProduction.screenshot({ path: join(screenshotDir, 'salima-phase2-production-mobile-390-light.png'), fullPage: true });
+  await mobileProduction.locator('#themeToggle').click();
+  await mobileProduction.waitForTimeout(200);
+  assert.equal(await mobileProduction.locator('html').getAttribute('data-theme'), 'night');
+  assert.equal(await mobileProduction.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, 'mobile dark production page overflows horizontally');
+  if (screenshotDir) await mobileProduction.screenshot({ path: join(screenshotDir, 'salima-phase2-production-mobile-390-dark.png'), fullPage: true });
+  assertNoPageErrors(mobileProduction, 'mobile production scenario');
+  await mobileProduction.close();
 
   const admin = await openScenario(browser, { role: 'admin', size: 20 });
   assert.equal((await admin.locator('#reportsNavLabel').innerText()).trim(), 'التقارير', 'admin reports label must stay unchanged');
+  await admin.locator('[data-view="production"]').click();
+  assert.equal(await admin.locator('.production-executive-header').isVisible(), true, 'admin must retain authorized production access');
+  assert.equal((await admin.locator('#productionModeLabel').innerText()).trim(), 'سجل جديد');
   await assertDateFilter(admin, 20);
   assert.equal(await admin.locator('[data-edit-production]').count(), 20, 'admin must be able to edit historical records');
   await admin.setViewportSize({ width: 390, height: 844 });
@@ -304,6 +461,7 @@ async function assertMobileRecordsLayout(page) {
   await admin.waitForTimeout(300);
   await assertMobileRecordsLayout(admin);
   if (screenshotDir) await admin.screenshot({ path: join(screenshotDir, 'salima-admin-mobile-records-polished.png'), fullPage: true });
+  assertNoPageErrors(admin, 'admin scenario');
   await admin.close();
 
   const engineer = await openScenario(browser, { role: 'engineer', size: 20 });
@@ -379,6 +537,7 @@ async function assertMobileRecordsLayout(page) {
   assert.equal(await engineer.locator('#engineerWeeklyReport .stat-card').count(), 6);
   assert.equal(await engineer.locator('#engineerWeeklyReport').evaluate(el => el.getBoundingClientRect().right <= innerWidth + 1), true, 'engineer report exceeds mobile viewport');
   if (screenshotDir) await engineer.screenshot({ path: join(screenshotDir, 'salima-engineer-mobile-report.png'), fullPage: true });
+  assertNoPageErrors(engineer, 'engineer scenario');
   await engineer.close();
 
   const emptyEngineer = await openScenario(browser, { role: 'engineer', size: 20, emptyWeek: true });
@@ -387,6 +546,7 @@ async function assertMobileRecordsLayout(page) {
   assert.equal(await emptyEngineer.locator('#engineerReportEmpty').isVisible(), true, 'empty engineer week must show a clear message');
   assert.equal((await emptyEngineer.locator('#engineerReportEmpty').innerText()).trim(), 'لا يوجد إنتاج مسجل لهذا الأسبوع');
   assert.equal(await emptyEngineer.locator('#printableWeeklyReport').isVisible(), false, 'empty engineer report must not reveal management data');
+  assertNoPageErrors(emptyEngineer, 'empty engineer scenario');
   await emptyEngineer.close();
 
   const recordsOnlyEngineer = await openScenario(browser, { role: 'engineer', size: 20, recordsOnly: true });
@@ -398,6 +558,7 @@ async function assertMobileRecordsLayout(page) {
   assert.equal(await recordsOnlyEngineer.locator('#cancelProductionEdit').isVisible(), true);
   await recordsOnlyEngineer.locator('#cancelProductionEdit').click();
   assert.equal(await recordsOnlyEngineer.locator('#view-records').isVisible(), true, 'cancel must return a records-only user to records');
+  assertNoPageErrors(recordsOnlyEngineer, 'records-only engineer scenario');
   await recordsOnlyEngineer.close();
 
   const clockShiftedEngineer = await openScenario(browser, { role: 'engineer', size: 20, factoryToday: '2026-10-24', mockDate: '2020-01-08' });
@@ -405,11 +566,16 @@ async function assertMobileRecordsLayout(page) {
   assert(clockQuery.filters.some(filter => filter.operator === 'gte' && filter.key === 'production_date' && filter.value === '2026-10-24'), 'engineer week must use server Saturday despite an old device clock');
   assert(clockQuery.filters.some(filter => filter.operator === 'lte' && filter.key === 'production_date' && filter.value === '2026-10-24'), 'engineer today must use the server calendar despite an old device clock');
   assert.equal(await clockShiftedEngineer.locator('#prodDate').inputValue(), '2026-10-24', 'default production date must come from the server calendar');
+  assertNoPageErrors(clockShiftedEngineer, 'clock-shifted engineer scenario');
   await clockShiftedEngineer.close();
 
-  await browser.close();
   console.log('Desktop/mobile layout, server calendar clock-shift, nylon reports, role scope, and >1000 pagination checks passed.');
+  } finally {
+    await browser.close();
+  }
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });
+
+module.exports = { openScenario, assertNoPageErrors, supabaseStub, appUrl, chromePath };
